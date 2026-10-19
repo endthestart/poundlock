@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 (unreleased)
+## 0.3.0 (19 October 2026)
 
 The first public release. Tested with Toolkit 0.5.0 and Dispatch 0.3.0.
 
