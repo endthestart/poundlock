@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "profile_id": "00000000-0000-0000-0000-000000000003",
+  "profile_name": "durable-local",
+  "operation": "job",
+  "data_destination": "operator_network",
+  "endpoint_kind": "openai",
+  "endpoint_id": "00000000-0000-0000-0000-000000000004",
+  "availability": "available",
+  "availability_reason": null,
+  "blocked_reason": null,
+  "warning_reason": "runner_not_connected",
+  "runner_status": "not_seen",
+  "connection_mode": "direct",
+  "managed_identity_status": null,
+  "usage": null
+}

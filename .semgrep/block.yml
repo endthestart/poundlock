@@ -1,0 +1,14 @@
+# Semgrep rules that fail the build. A rule belongs here only while it has no
+# findings; one with findings lives in report.yml until they are fixed.
+# Written for this repository and licensed with it: no registry rules, so the
+# run is offline and reproducible. Each rule has a positive and a negative
+# control in block.rs (report.rs for report.yml); run them with
+# `cd .semgrep && semgrep --test .` so a rule that never fires is caught.
+rules:
+  - id: poundlock-rust-tls-verification-off
+    languages: [rust]
+    severity: ERROR
+    message: Certificate or hostname verification is switched off.
+    pattern-either:
+      - pattern: $B.danger_accept_invalid_certs(true)
+      - pattern: $B.danger_accept_invalid_hostnames(true)

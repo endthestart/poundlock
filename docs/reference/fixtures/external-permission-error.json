@@ -1,0 +1,7 @@
+{
+  "error": {
+    "message": "this application token is not authorized to send data to external models",
+    "type": "poundlock_error",
+    "code": "external_permission_required"
+  }
+}

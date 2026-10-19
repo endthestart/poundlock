@@ -1,0 +1,58 @@
+# cargo-deny policy for the security job in .github/workflows/ci.yml.
+#
+# cargo-deny has no expiry dates, so every entry in `advisories.ignore`,
+# `licenses.exceptions` and `bans.skip` must sit on one line and carry
+# "expires: YYYY-MM-DD" in its reason; scripts/check-exception-dates.py fails
+# the build the day after. All targets are checked (no [graph] targets), so a
+# Windows-only or macOS-only crate cannot hide a bad licence.
+
+[advisories]
+# Same posture as the `cargo audit --deny warnings` step this replaces:
+# vulnerabilities, unmaintained and unsound crates, and yanked versions fail.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Poundlock is Apache-2.0. Only permissive licences that can ship inside an
+# Apache-2.0 binary are allowed; copyleft needs a reviewed per-crate
+# exception. A dual-licensed crate passes on any allowed alternative (r-efi's
+# LGPL option and memchr's Unlicense option are not needed).
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.93
+exceptions = []
+
+[bans]
+# Duplicate versions are reported, not blocking: the tree has a few that follow
+# upstream (syn, getrandom, windows-sys, winnow).
+multiple-versions = "warn"
+wildcards = "deny"
+allow-wildcard-paths = true
+# TLS is rustls with ring and SQLite is bundled, so the image carries no
+# OpenSSL. These bans keep it that way.
+deny = [
+    { crate = "openssl", reason = "TLS is rustls; OpenSSL bindings would add a system library to the image" },
+    { crate = "openssl-sys", reason = "TLS is rustls; OpenSSL bindings would add a system library to the image" },
+    { crate = "native-tls", reason = "TLS is rustls; native-tls pulls in the platform TLS stack" },
+]
+skip = []
+skip-tree = []
+
+[sources]
+# crates.io only: no git dependencies and no other registries.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

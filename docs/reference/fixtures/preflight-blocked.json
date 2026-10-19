@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "profile_id": "00000000-0000-0000-0000-000000000001",
+  "profile_name": "review-external",
+  "operation": "inference",
+  "data_destination": "external",
+  "endpoint_kind": "litellm",
+  "endpoint_id": "00000000-0000-0000-0000-000000000002",
+  "availability": "blocked",
+  "availability_reason": "external_permission_required",
+  "blocked_reason": "external_permission_required",
+  "warning_reason": null,
+  "connection_mode": "managed_applications",
+  "managed_identity_status": null,
+  "usage": {
+    "status": "not_provisioned",
+    "connection_mode": "managed_applications",
+    "external_authorized": false,
+    "usage_status": "not_provisioned",
+    "budget": {
+      "max_budget": 5.0,
+      "budget_duration": "30d"
+    }
+  }
+}

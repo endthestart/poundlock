@@ -1,0 +1,66 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:poundlock:capability-measurement:1",
+  "title": "One measured capability, as accepted by PATCH /api/v1/model-profiles/{id}",
+  "description": "Poundlock owns this file. scripts/toolkit-capabilities.py validates its output against it, and the Rust struct is tested against it. Changing the shape means changing this file, the struct and the script together.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "name",
+    "status",
+    "passed",
+    "attempted",
+    "source",
+    "measured_at",
+    "measured_settings"
+  ],
+  "properties": {
+    "name": {
+      "enum": ["code_repair_verified", "plan_tool_schema", "sealed_investigation"]
+    },
+    "status": { "enum": ["qualified", "smoke", "insufficient"] },
+    "passed": { "type": "integer", "minimum": 0 },
+    "attempted": { "type": "integer", "minimum": 0 },
+    "source": { "type": "string", "minLength": 1 },
+    "toolkit_version": { "type": "string" },
+    "run_ids": { "type": "array", "items": { "type": "string" } },
+    "identity_sha256": { "type": "string" },
+    "result_sha256": {
+      "description": "One hash per measurement, not per run: a paired investigation is one verdict from two documents. run_ids carries the individual runs.",
+      "type": "string"
+    },
+    "measured_at": { "type": "string", "format": "date-time" },
+    "measured_settings": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context_tokens", "max_output_tokens", "reasoning", "harness"],
+      "properties": {
+        "context_tokens": { "type": "integer", "minimum": 1 },
+        "max_output_tokens": { "type": "integer", "minimum": 0 },
+        "reasoning": { "enum": ["model_default", "off"] },
+        "harness": { "type": "string" }
+      }
+    },
+    "note": { "type": "string", "maxLength": 2048 },
+    "recorded_at": {
+      "description": "Server-controlled. Any client-supplied value is overwritten.",
+      "type": "string"
+    }
+  },
+  "allOf": [
+    {
+      "description": "Toolkit-sourced evidence must carry its provenance. `identity_sha256` is deliberately absent from this list: a paired measurement whose two runs disagree on identity omits it, and that case is already reported as insufficient.",
+      "if": {
+        "required": ["source"],
+        "properties": { "source": { "const": "poundlock_toolkit" } }
+      },
+      "then": {
+        "required": ["run_ids", "result_sha256", "toolkit_version"],
+        "properties": {
+          "run_ids": { "minItems": 1 },
+          "result_sha256": { "minLength": 1 }
+        }
+      }
+    }
+  ]
+}

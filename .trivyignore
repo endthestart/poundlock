@@ -1,0 +1,3 @@
+# Trivy exceptions for the image scan in .github/workflows/ci.yml.
+# One id per line as "CVE-... exp:YYYY-MM-DD", with the reason on the line above.
+# Trivy reports the id again the day after the date. Nothing here is permanent.

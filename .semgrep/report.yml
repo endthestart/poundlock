@@ -1,0 +1,68 @@
+# Semgrep rules that are reported but do not fail the build, because each still
+# has findings to review; CI prints them on every run.
+# When a rule's findings are fixed, move it to block.yml.
+rules:
+  - id: poundlock-rust-shell-command
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      A shell is started here. Pass argv to the program directly; if a shell is
+      unavoidable, the command text must be a fixed string and every value
+      must reach it as a positional argument.
+    patterns:
+      - pattern-either:
+          - pattern: Command::new($P)
+          - pattern: std::process::Command::new($P)
+          - pattern: tokio::process::Command::new($P)
+      - metavariable-regex:
+          metavariable: $P
+          regex: ^"(/usr/bin/env|(/bin/|/usr/bin/)?(ba|z|da)?sh)"$
+    paths:
+      exclude: ["tests/**", "**/*_tests.rs", "**/tests.rs"]
+
+  - id: poundlock-rust-debug-derive-on-secret
+    languages: [rust]
+    severity: ERROR
+    message: >-
+      `Debug` is derived on a struct with a field named like a credential, so
+      `{:?}` would print it. Implement Debug by hand and redact the field.
+    patterns:
+      - pattern: |
+          #[derive(..., Debug, ...)]
+          struct $S {
+            ...,
+            $F: $T,
+            ...
+          }
+      - metavariable-regex:
+          metavariable: $F
+          regex: (?i)^(pub )?(.*_)?(token|secret|password|passwd|api_?key|private_?key|virtual_?key|credential|authorization|bearer)$
+    paths:
+      exclude: ["tests/**", "**/*_tests.rs", "**/tests.rs"]
+
+  - id: poundlock-rust-http-client-follows-redirects
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      This reqwest client follows redirects (the default), which can carry a
+      bearer token to another host. Add `.redirect(reqwest::redirect::Policy::none())`
+      unless the target is a fixed public URL.
+    pattern-either:
+      - patterns:
+          - pattern: $X.build()
+          - metavariable-regex:
+              metavariable: $X
+              regex: (?s)^(reqwest::)?Client::builder\(\)(?!.*\.redirect\()
+      - pattern: reqwest::Client::new()
+    paths:
+      exclude: ["tests/**", "**/*_tests.rs", "**/tests.rs"]
+
+  - id: poundlock-rust-plain-http-default
+    languages: [rust]
+    severity: WARNING
+    message: >-
+      A clap default points at a non-loopback `http://` URL. A bearer token
+      sent to it crosses the network in clear text; default to https or loopback.
+    pattern-regex: 'default_value(_t)?\s*=\s*"http://(?!127\.0\.0\.1|localhost|\[::1\])[^"\n]*"'
+    paths:
+      exclude: ["tests/**", "**/*_tests.rs", "**/tests.rs"]

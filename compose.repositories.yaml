@@ -1,0 +1,5 @@
+# Optional registered server repositories. Uploaded/Git jobs do not need this.
+services:
+  runner:
+    volumes:
+      - ${POUNDLOCK_PROJECTS_PATH:?Set the repository parent directory}:/projects:ro

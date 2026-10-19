@@ -1,0 +1,59 @@
+# System routing allows any connection chosen by the OS, including Wi-Fi.
+# To bind node-to-controller traffic to one interface, run `poundlock
+# node-interfaces` and use: network = { mode = "interface", name = "enp3s0" }
+network = { mode = "system" }
+
+# The Linux installer uses the controller and machine name saved by Machines.
+# controller = "https://poundlock.example.com"
+# name = "workstation"
+# The controller address must be https:// unless it is on this machine. Plain
+# http:// to another machine sends this node's credential unencrypted and lets
+# anyone on the network answer for the controller. To accept that on a network
+# you trust, uncomment:
+# allow_insecure_http = true
+# Explicit upgrades with a retained rollback binary. `true` (also the default
+# when this line is absent) lets an idle node install a newer binary from the
+# controller: only a signed one when this build embeds the release key,
+# otherwise only over https:// or loopback.
+auto_update = false
+# Also how long the controller may hold an idle action poll open (1 to 10).
+heartbeat_seconds = 3
+# Stop an OS sleep inhibitor if controller renewals disappear.
+lease_timeout_seconds = 300
+
+# Commands are argument arrays, never shell strings. The node substitutes only
+# the documented placeholders: {lease_id} and {operation_id} are always UUIDs,
+# and {model} starts with a letter or digit; an action with anything else is
+# refused. Empty commands describe an always-ready runtime.
+# Timeout or failure stops that command's process group. A successful ensure
+# may leave a server it started; release and stop must end it.
+[runtimes.always-ready]
+ensure = []
+renew = []
+release = []
+stop = []
+
+# A lifecycle manager can be attached without exposing its implementation to
+# poundlock or developer clients. A runtime is one hardware slot: every model
+# profile that names it shares the slot, and {model} (the profile's model id)
+# tells the manager which model to load. {profile} is the runtime name.
+# [runtimes.coding]
+# ensure = ["/opt/model-manager", "ensure", "{model}", "{lease_id}", "{operation_id}"]
+# renew = ["/opt/model-manager", "renew", "{lease_id}", "{operation_id}"]
+# release = ["/opt/model-manager", "release", "{lease_id}", "{operation_id}"]
+# stop = ["/opt/model-manager", "stop", "{lease_id}", "{operation_id}"]
+#
+# Optional: report which serving application is actually running without
+# poundlock managing it. No placeholders; the command takes no arguments
+# describing the current action. It must print one JSON object on stdout
+# within a few seconds; anything else is dropped and reported as an error
+# for this runtime only.
+# identity = ["/opt/model-manager", "identity"]
+
+# The built-in `ollama` runtime manages already-installed Ollama models. It is
+# off unless enabled here; then select it for a model profile and set its idle
+# delay in Setup.
+# [ollama]
+# enabled = true
+# Local-only address; never a gateway or another machine. No API credentials.
+# base_url = "http://127.0.0.1:11434"

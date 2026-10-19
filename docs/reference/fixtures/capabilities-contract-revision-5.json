@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "api_major": 1,
+  "contract_revision": 5,
+  "product_version": "0.3.0",
+  "features": [
+    "access_preflight",
+    "availability_reasons",
+    "capability_evidence",
+    "capacity_queue",
+    "data_destination",
+    "durable_jobs",
+    "external_invoke_permission",
+    "managed_application_identities",
+    "model_status",
+    "reasoning_levels",
+    "route_catalog",
+    "routing_revision",
+    "usage_summary",
+    "verifier_toolchain"
+  ],
+  "verifier": {
+    "python": "3.14",
+    "uv": "0.12.24",
+    "writable_exec_paths": [
+      "/tmp",
+      "/work",
+      "/home/worker"
+    ]
+  }
+}

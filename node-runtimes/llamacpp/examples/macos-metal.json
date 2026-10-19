@@ -1,0 +1,45 @@
+{
+  "schema_version": 1,
+  "runtime": {
+    "sweeper": "external",
+    "caffeinate": true
+  },
+  "profiles": {
+    "example-8b": {
+      "model": {
+        "family": "Example-8B",
+        "quantization": "Q4_K_M",
+        "source": "example-org/Example-8B-GGUF",
+        "path": "/opt/poundlock/models/Example-8B-Q4_K_M.gguf",
+        "size_bytes": 4920000000,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "server": {
+        "executable": "/opt/homebrew/bin/llama-server",
+        "min_build": 11000,
+        "host": "127.0.0.1",
+        "port": 8080,
+        "context_tokens": 32768,
+        "api_key_file": "/opt/poundlock/llamacpp.key",
+        "slots_endpoint": false,
+        "environment": {},
+        "arguments": [
+          "--parallel",
+          "1",
+          "--n-gpu-layers",
+          "99",
+          "--flash-attn",
+          "on",
+          "--jinja",
+          "--no-webui"
+        ]
+      },
+      "required_log_markers": [
+        "layers to GPU"
+      ],
+      "warm_seconds": 1200,
+      "lease_timeout_seconds": 300,
+      "startup_timeout_seconds": 300
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "error": {
+    "type": "poundlock_error",
+    "code": "unknown_model_profile",
+    "param": "model",
+    "message": "No model is named 'qwen3.8-27b-mtp'. That is the server's own model ID for 'orion-qwen3.8-27b-mtp'. Send that name instead. GET /v1/models lists the names available to this token.",
+    "poundlock": {
+      "did_you_mean": [
+        {
+          "name": "orion-qwen3.8-27b-mtp",
+          "profile_id": "5b0f3c1e-8d2a-4f6b-9c7e-2a1d4e6f8b90",
+          "reason": "server_model_id"
+        }
+      ]
+    }
+  }
+}

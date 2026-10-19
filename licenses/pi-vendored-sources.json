@@ -1,0 +1,18 @@
+[
+  {
+    "package": "highlight.js",
+    "version": "11.9.0",
+    "upstream": "https://registry.npmjs.org/highlight.js/-/highlight.js-11.9.0.tgz",
+    "integrity": "sha512-fJ7cW7fQGCYAkgv4CPfwFHrfd/cLS4Hau96JuJ+ZTOWhjnhoeN1ub1tFmALm/+lW5z4WCAuAV9bm05AP0mS6Gw==",
+    "file": "highlight.js-11.9.0-LICENSE",
+    "sha256": "6c081431591d9df696c82dc598fe1423765b8a299b200ed00b281afd0f64c490"
+  },
+  {
+    "package": "marked",
+    "version": "18.0.5",
+    "upstream": "https://registry.npmjs.org/marked/-/marked-18.0.5.tgz",
+    "integrity": "sha512-S6GcvALHg6K4ohtu4E7x0a1AqhAjp6cV8KhLSyN9qVapnzJkusVBxZRcIU9AeYsbe6P1hKDusSbEOzGyyuce6w==",
+    "file": "marked-18.0.5-LICENSE",
+    "sha256": "8e3a3f82f59a60958f56ca08f445647c32a4733dc7ca6c2c46f6eb898471ab9c"
+  }
+]

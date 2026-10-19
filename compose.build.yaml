@@ -1,0 +1,8 @@
+# Source development only; ordinary installs pull a release image.
+services:
+  controller:
+    build:
+      context: .
+  runner:
+    build:
+      context: .

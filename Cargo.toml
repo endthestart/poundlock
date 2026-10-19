@@ -1,0 +1,51 @@
+[package]
+name = "poundlock"
+version = "0.3.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "Self-hosted control plane for coding agents and private inference"
+
+[dependencies]
+agent-client-protocol = "=2.0.0"
+anyhow = "1"
+async-stream = "0.3"
+axum = { version = "0.8", features = ["macros"] }
+base64 = "0.22"
+bytes = "1"
+chacha20poly1305 = "0.10"
+chrono = { version = "0.4", features = ["serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+flate2 = "1"
+futures-util = "0.3"
+icu_normalizer = { version = "2", default-features = false, features = ["compiled_data"] }
+libc = "0.2"
+rand = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+ring = "0.17"
+rusqlite = { version = "0.37", features = ["bundled"] }
+semver = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+subtle = "2"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+toml = "0.9"
+tower-http = { version = "0.6", features = ["catch-panic", "compression-gzip", "request-id", "timeout", "trace"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+http-body = "1"
+url = "2"
+uuid = { version = "1", features = ["serde", "v4"] }
+
+[dev-dependencies]
+http-body-util = "0.1"
+# `start_paused` test time, so a lease-grace test does not take 90 real seconds.
+tokio = { version = "1", features = ["full", "test-util"] }
+tower = { version = "0.5", features = ["util"] }
+
+[profile.release]
+lto = "thin"
+strip = true

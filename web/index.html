@@ -1,0 +1,479 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>poundlock</title>
+  <link rel="stylesheet" href="/theme.css">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/theme-boot.js"></script>
+</head>
+<body>
+  <header>
+    <div class="header-title">
+      <h1>poundlock</h1>
+      <span class="lede">Operator console</span>
+    </div>
+    <div class="header-actions">
+      <div class="status"><span id="status-dot"></span><span id="status-text">Not connected</span></div>
+      <label class="visually-hidden" for="theme-menu">Theme</label>
+      <select id="theme-menu" aria-label="Theme">
+        <option value="system">System</option>
+        <option value="latte">Latte</option>
+        <option value="frappe">Frappé</option>
+        <option value="macchiato">Macchiato</option>
+        <option value="mocha">Mocha</option>
+      </select>
+    </div>
+  </header>
+
+  <main>
+    <section id="unlock" class="hero panel">
+      <div>
+        <h2>Connect to poundlock</h2>
+        <p>Use a jobs API token to submit and review work, or an admin token to manage this controller. Poundlock Dispatch needs an application token with jobs and inference permissions. Do not paste the administrator token into Dispatch.</p>
+      </div>
+      <form id="token-form">
+        <label>Access token<input id="token" type="password" autocomplete="current-password" required></label>
+        <button>Unlock</button>
+      </form>
+    </section>
+
+    <div id="application" hidden>
+      <section class="hero">
+        <div>
+          <h2>Overview</h2>
+        </div>
+        <div class="hero-actions">
+          <button id="refresh" class="secondary">Refresh</button>
+          <button id="sign-out" class="secondary">Sign out</button>
+        </div>
+      </section>
+
+      <section id="summary" class="metrics"></section>
+      <p id="occupancy-detail" class="hint occupancy"></p>
+
+      <nav class="tabs" aria-label="Sections">
+        <button data-tab="jobs" class="active">Jobs</button>
+        <button data-tab="nodes">Machines</button>
+        <button data-tab="models">Models</button>
+        <button data-tab="connections">Connections</button>
+        <button data-tab="access">Access</button>
+      </nav>
+
+      <section id="jobs" class="tab active">
+        <div class="grid two">
+          <form id="job-form" class="panel">
+            <h3>Submit a job</h3>
+            <label>Task<textarea id="job-prompt" rows="7" required placeholder="Describe the work, expected result and how to check it."></textarea></label>
+            <label>Starting files<select id="job-source"><option value="snapshot">Upload a folder</option><option value="git">Read-only Git checkout</option><option value="empty">Start with an empty workspace</option><option value="registered" id="job-registered-option">Advanced: server repository</option></select></label>
+            <div id="job-upload">
+              <label>Folder<input id="job-folder" type="file" webkitdirectory multiple></label>
+              <p class="hint">Review the files before submitting. The agent works on a copy. Git metadata is excluded; common dependencies, build output and secret files start unchecked. Limit: 50 MiB and 10,000 files.</p>
+              <p id="job-file-summary" class="hint">No folder selected.</p>
+              <details id="job-file-review" hidden><summary>Review included files</summary><div id="job-files" class="source-files"></div></details>
+            </div>
+            <div id="job-git" hidden>
+              <p class="hint" id="job-git-hosts"></p>
+              <label>Repository URL<input id="job-git-url" type="url" placeholder="https://github.com/owner/repository.git"></label>
+              <label>Commit ID<input id="job-git-revision" pattern="[a-fA-F0-9]{40}" placeholder="Full 40-character commit ID"></label>
+              <p class="hint">Use the full commit ID, not a branch or tag. For Git LFS or submodules, upload a folder containing the resolved files.</p>
+              <details><summary>Private repository credentials (optional)</summary>
+                <p class="hint">Use a token with read access to this repository only. Do not grant write access.</p>
+                <label>Git username<input id="job-git-username" autocomplete="off"></label>
+                <label>Repository-read token<input id="job-git-token" type="password" autocomplete="off"></label>
+              </details>
+            </div>
+            <label id="job-project-label" hidden>Server repository<select id="job-project" disabled></select></label>
+            <label>Model<select id="job-model" required></select></label>
+            <p class="hint" id="job-toolchain">Independent-check toolchain is advertised after you connect.</p>
+            <details id="job-checks"><summary>Checks and permissions (optional)</summary>
+              <label>Verification commands<textarea id="job-commands" rows="3" placeholder="Example: python3 -m unittest discover -s tests"></textarea></label>
+              <p class="hint">One shell command per line, run in order against the proposed changes. Python 3 and Node.js are installed. Include dependency installation here if needed.</p>
+              <label>Protected files or directories<textarea id="job-protected" rows="2" placeholder="Example: tests"></textarea></label>
+              <p class="hint">One path per line, relative to the starting folder. Protected files must remain unchanged, including additions or deletions inside protected directories.</p>
+              <div class="inline"><label>Repair attempts after failed checks<input id="job-repairs" type="number" min="0" max="3" value="0" required></label><label>Seconds per command<input id="job-check-timeout" type="number" min="1" max="600" value="300" required></label></div>
+              <label>Command working directory<input id="job-check-cwd" placeholder="Starting folder (default)"></label>
+              <label class="check"><input id="job-network" type="checkbox">Allow outbound network access</label>
+              <p class="hint" id="job-network-hint">Allows the agent and verification commands to install dependencies and contact the internet and reachable local services.</p>
+            </details>
+            <details><summary>Advanced</summary><label>Agent harness<select id="job-harness" required></select></label></details>
+            <p class="hint">Review patches and verification results before applying changes. Job completion alone does not confirm correctness.</p>
+            <button>Submit job</button>
+          </form>
+          <div class="panel">
+            <h3>Jobs</h3>
+            <div id="job-list" class="list empty">No jobs yet.</div>
+          </div>
+        </div>
+        <details id="project-panel" class="panel">
+          <summary>Server repositories <span class="optional">(optional)</span></summary>
+          <div class="grid two">
+            <form id="project-form">
+              <label>Name<input id="project-name" required placeholder="My product"></label>
+              <label>Repository paths<textarea id="project-roots" rows="6" required placeholder="backend&#10;frontend"></textarea></label>
+              <p class="hint">One path per line, relative to the configured projects directory. Each must be a Git root.</p>
+              <label>Instruction files<textarea id="project-instructions" rows="3" placeholder="AGENTS.md&#10;docs/tutorial/README.md"></textarea></label>
+              <p class="hint">Optional file paths within each repository. <code>AGENTS.md</code> is read automatically.</p>
+              <button id="project-save">Save project</button> <button id="project-cancel" type="button" class="secondary" hidden>Cancel edit</button>
+            </form>
+            <div id="project-list" class="list empty">No server repositories configured.</div>
+          </div>
+        </details>
+        <div id="job-detail" class="panel detail" hidden></div>
+      </section>
+
+      <section id="nodes" class="tab">
+        <details id="linux-guide" class="panel setup-guide">
+          <summary>Linux installation guide</summary>
+          <p>Install the node first. It reports the machine’s hardware and connections, and keeps it awake during work. You can set up a model server afterward.</p>
+          <h4>Before you start</h4>
+          <ul>
+            <li>Linux with systemd and glibc 2.36 or newer, such as Debian 12, Ubuntu 24.04 or current CachyOS. Check with <code>systemctl --version</code> and <code>getconf GNU_LIBC_VERSION</code>.</li>
+            <li>An Intel/AMD x86_64 or ARM64 processor. Check with <code>uname -m</code>.</li>
+            <li>A non-root login with sudo, Bash, coreutils, util-linux, systemd-logind and polkit.</li>
+            <li>The machine must be able to reach the controller URL below. Drivers and models are needed for inference, but are not required to enroll.</li>
+          </ul>
+          <p id="node-reach-hint" class="hint"></p>
+          <h4>Install and connect</h4>
+          <ol>
+            <li>In Enroll a machine, enter a unique name, choose Linux and select the processor. Choose System routing, or One interface to restrict its connection to the controller.</li>
+            <li>Download all three files into one folder on the Linux computer, such as <code>~/Downloads/poundlock</code>. If using this page on another computer, copy the files to Linux first. Any folder you own works.</li>
+            <li>Create a token when ready to install. Open a terminal in that folder, run the displayed install command, and paste the token at the hidden prompt. Tokens expire after 15 minutes and can be used once.</li>
+            <li>The installer checks the binary and configuration, places them in their permanent locations, and starts a systemd service under your login. Sudo installs the service; the node runs without root privileges. Keep the installer for later diagnostics, upgrades and removal.</li>
+            <li>Confirm Online in Machines and review Technical details. Use Model server setup help for installation links matched to the reported OS and GPU, or connect a server you already run. Save its endpoint on Connections, then add a model on Models using this machine. Choose <strong>Ollama — managed loading and unloading</strong> for Ollama, or <code>always-ready</code> for an externally managed server.</li>
+            <li>Use Test on Models to confirm inference, then submit a small job with a verification command. If the machine can sleep, configure Wake-on-LAN below and test from real sleep. Avoid SSH probes during the test; they can wake some machines.</li>
+          </ol>
+          <details><summary>Installed files and advanced configuration</summary>
+            <p>The installer creates <code>/etc/poundlock/node.toml</code>, a private <code>/var/lib/poundlock</code> directory, <code>poundlock-node.service</code>, and a polkit rule allowing the service login to inhibit sleep. You do not need to place downloads in system folders.</p>
+            <p>Drivers, models, model services, routes and firewall rules stay under your control. The default <code>always-ready</code> runtime assumes your model server is already running.</p>
+            <p>For One interface, run these commands in the download folder (use the ARM64 filename on ARM). Copy an interface name into the form and download the updated configuration.</p><pre>chmod +x ./poundlock-linux-x86_64
+./poundlock-linux-x86_64 node-interfaces</pre>
+            <p>Advanced runtime commands in node.toml use absolute executable paths, without shell strings. Writable state must fit <code>/var/lib/poundlock</code>, or a narrow systemd <code>ReadWritePaths</code> override. Keep passwords and API keys out of node.toml; the node stores its credential separately with mode 0600.</p>
+          </details>
+          <details><summary>Diagnose or recover</summary>
+            <p>From the folder containing the installer, run:</p>
+            <pre>sudo bash ./poundlock-node.sh doctor
+journalctl -u poundlock-node.service --since '10 minutes ago'</pre>
+            <p>Doctor checks configuration, the selected connection, authentication and sleep inhibition without running models.</p>
+            <ul>
+              <li>Configuration error: correct node.toml and run <code>/var/lib/poundlock/poundlock node-check --config /etc/poundlock/node.toml</code>.</li>
+              <li>Connection error: confirm the service is running and can reach the controller. One interface will stay offline if that interface disconnects.</li>
+              <li>Plain HTTP refused: use an https:// controller address, or add <code>allow_insecure_http = true</code> to node.toml to accept plain HTTP on a network you trust.</li>
+              <li>Authentication error after a reinstall: remove the old registration in Machines, create a new token and enroll again. Finish or cancel active work first.</li>
+              <li>Sleep inhibition denied: check systemd-logind, polkit and <code>/etc/polkit-1/rules.d/60-poundlock-node.rules</code>. Run doctor under the service account; do not disable sleep system-wide.</li>
+              <li>Interrupted install: correct the reported problem and repeat the command. An existing managed installation keeps its credential. The installer refuses unmanaged paths and symlinks.</li>
+            </ul>
+          </details>
+          <details><summary>Upgrade and roll back</summary>
+            <p>In Enroll a machine, select Linux and your processor, then download the node binary and Linux installer. Downloading the binary displays the complete upgrade command with its checksum. Run it from that download folder; keep your existing configuration and enrollment. No new token is needed.</p>
+            <pre>sudo bash ./poundlock-node.sh upgrade --binary ./poundlock-linux-x86_64 --sha256 HASH
+sudo bash ./poundlock-node.sh rollback
+sudo bash ./poundlock-node.sh resume</pre>
+            <p>Upgrade pauses an idle node, validates the replacement and keeps the previous binary. Active work blocks maintenance. Rollback restores the previous binary; resume recovers an interrupted maintenance operation after its cause is fixed. Check Test on Models afterward.</p>
+            <p>Configurations without <code>auto_update</code> keep automatic idle updates; set <code>auto_update = false</code> in node.toml to choose explicit upgrades. A node that verifies signed updates installs only a newer binary signed with its release key; any other node refuses automatic updates unless the controller address is https:// or loopback.</p>
+          </details>
+          <details><summary>Remove or reinstall</summary>
+            <p>To uninstall from a working Linux machine, finish or cancel its work, then run:</p>
+            <pre>sudo bash ./poundlock-node.sh remove</pre>
+            <p>This revokes its credential and removes the service, configuration, node binaries and polkit rule. Restore controller connectivity first if it is unreachable. Model files and GPU drivers remain installed.</p>
+            <p>For a computer already wiped or no longer available, use Remove machine in its card. This disconnects the registration and keeps job history; it cannot uninstall files remotely. A new token cannot take over a name that is still online or paused; wait until it is offline, or remove it first. A new installation requires a new enrollment token.</p>
+          </details>
+          <details><summary>Check the complete installation</summary>
+            <ul>
+              <li>Confirm Online, the selected connection, Test on Models and a small verified job.</li>
+              <li>Reboot and confirm reconnection without another token prompt.</li>
+              <li>Test sleep, wake, inference and cancellation when supported.</li>
+              <li>Upgrade, roll back, remove and enroll again. Report any unclear step or unexplained failure.</li>
+            </ul>
+          </details>
+        </details>
+        <div class="grid two">
+          <div class="machine-management">
+          <div class="panel"><h3>Machines</h3><div id="node-list" class="list empty">No machines enrolled.</div><details id="removed-machines" hidden><summary>Removed machines</summary><div id="removed-node-list" class="list"></div></details></div>
+          <div id="wake-panel" class="panel">
+            <h3>Test Wake-on-LAN</h3>
+            <label>Machine<select id="wol-node" required></select></label>
+            <p id="wake-settings-note" class="hint"></p>
+            <button id="test-wake" type="button">Wake test</button>
+            <p id="wake-result" class="hint" role="status" aria-live="polite"></p>
+            <details id="wake-settings"><summary>Edit wake settings</summary>
+              <form id="wol-form">
+                <label>Wake interface<select id="wake-interface" required></select></label>
+                <label>MAC address<input id="wol-mac" required aria-describedby="wake-interface-note"></label>
+                <p id="wake-interface-note" class="hint"></p>
+                <label>Broadcast address and port<input id="wol-broadcast" required></label>
+                <button id="save-wake">Save wake settings</button>
+              </form>
+            </details>
+          </div>
+          </div>
+          <form id="enroll-form" class="panel">
+            <h3>Enroll a machine</h3>
+            <h4>1. Choose this machine’s settings</h4>
+            <label>Machine name<input id="enroll-name" required maxlength="80" placeholder="workstation"></label>
+            <label>Operating system<select id="enroll-platform"><option value="linux">Linux</option><option value="macos">macOS</option></select></label>
+            <label>Processor<select id="enroll-arch"><option value="x86_64">Intel / AMD (x86_64)</option><option value="aarch64">ARM64 / Apple silicon</option></select></label>
+            <label>Node connection<select id="enroll-network"><option value="system">System routing</option><option value="interface">One interface</option></select></label>
+            <label id="enroll-interface-label" hidden>Network interface<input id="enroll-interface" disabled maxlength="15" pattern="[A-Za-z0-9_.:\-]+" placeholder="Interface name from node-interfaces"></label>
+            <p class="hint">System routing can use any available network interface. One interface restricts the node’s controller connection; if it disconnects, the node goes offline. Configure the model server’s address separately.</p>
+            <h4 id="enroll-download-title">2. Download to the Linux computer</h4>
+            <p id="enroll-download-hint" class="hint">Save all three files together in any folder you own, such as ~/Downloads/poundlock. If downloading on another computer, copy them to Linux first. The installer takes care of permanent locations; keep the installer for later maintenance.</p>
+            <button id="download-toml" type="button" class="secondary">Download node.toml</button>
+            <button id="download-binary" type="button" class="secondary">Download node binary</button>
+            <button id="download-installer" type="button" class="secondary">Download Linux installer</button>
+            <div id="node-upgrade" hidden>
+              <h4>Update an existing Linux installation</h4>
+              <p class="hint">Keep the downloaded filename and Linux installer together. Run this command in that folder. Your configuration and enrollment are kept; no new token is needed.</p>
+              <pre id="node-upgrade-command"></pre>
+            </div>
+            <h4>3. Install and enroll</h4>
+            <p id="enroll-install-hint" class="hint">Open a terminal in that folder (for example, cd ~/Downloads/poundlock). Create a token when ready, then run the command shown below. The installer prompts for your token and installs the service.</p>
+            <button>Create token</button>
+            <p class="hint">Tokens are single-use and expire after 15 minutes.</p>
+            <div id="enroll-issued" class="issued" data-reveal hidden>
+              <strong>Copy this token now</strong>
+              <p class="hint">It will not be shown again. If you lose it, create a new token.</p>
+              <div class="secret-row"><input id="enroll-secret" data-secret readonly><button id="copy-enroll-token" type="button" class="secondary">Copy token</button></div>
+              <pre id="enroll-command"></pre>
+              <button id="copied-enroll" type="button" class="secondary">Clear token</button>
+            </div>
+            <h4>4. Confirm the connection</h4>
+            <p class="hint">Look for Online in Machines. Then add the model server on Connections and a model on Models, and use Test to check inference. See the Linux installation guide above for details and recovery.</p>
+          </form>
+        </div>
+
+      </section>
+
+      <section id="models" class="tab">
+        <div class="models-toolbar">
+          <div class="segmented" role="tablist" aria-label="Models view">
+            <button type="button" class="seg-btn active" data-model-view="ready" role="tab" aria-selected="true">Ready</button>
+            <button type="button" class="seg-btn" data-model-view="discover" role="tab" aria-selected="false">Discover</button>
+          </div>
+          <button id="add-model" type="button">Add model</button>
+        </div>
+        <div id="models-ready" class="model-view active">
+          <div id="ready-groups"></div>
+        </div>
+        <div id="models-discover" class="model-view">
+          <div id="route-handoff" class="panel" hidden></div>
+          <div class="panel">
+            <div class="discover-head"><h3>Routes on your gateways</h3><button id="discover-refresh" type="button" class="secondary">Refresh</button></div>
+            <div id="discover-gateways" class="list empty">Open Discover to load your gateways’ routes.</div>
+          </div>
+          <div class="panel">
+            <div class="discover-head"><h3>OpenRouter catalog</h3><button id="discover-catalog-load" type="button" class="secondary">Look up</button></div>
+            <p class="hint">Optional. Looking it up sends one request from the controller to openrouter.ai, with no key or prompt. Nothing is sent until you choose Look up.</p>
+            <p id="discover-catalog-note" class="hint"></p>
+            <div class="discover-filters">
+              <label>Search<input id="discover-search" placeholder="Filter by id or name"></label>
+              <label>Provider<select id="discover-provider"><option value="">All providers</option></select></label>
+              <label class="check"><input type="checkbox" id="discover-unrouted">Not yet routed only</label>
+            </div>
+            <div class="legend-row"><span class="legend-item"><span class="letter-badge">C</span> Configured route</span><span class="legend-item"><span class="letter-badge">L</span> Listed by OpenRouter, not yet routed</span></div>
+            <div id="discover-catalog" class="list empty"></div>
+          </div>
+        </div>
+      </section>
+
+      <section id="connections" class="tab">
+        <div class="grid two">
+          <form id="endpoint-form" class="panel">
+            <h3>Inference endpoint</h3>
+            <p class="hint">Choose Model server for a direct connection, or Gateway if you use LiteLLM.</p>
+            <label>Name<input id="endpoint-name" required placeholder="Home llama.cpp"></label>
+            <label>Type<select id="endpoint-kind">
+              <option value="openai">Model server</option>
+              <option value="litellm">Gateway (LiteLLM)</option>
+            </select></label>
+            <label>Base URL<input id="endpoint-url" type="url" required placeholder="API URL ending in /v1"></label>
+            <p class="hint">Copy the server’s network API address. A localhost address points to the controller itself. Use authentication when the server supports it.</p>
+            <label>Public address (optional)<input id="endpoint-public-url" type="url" placeholder="https://litellm.example.net"></label>
+            <p class="hint">Where you open this service in a browser, for example through your reverse proxy. Used for links such as the LiteLLM Admin UI; requests always use the base URL.</p>
+            <fieldset id="endpoint-destination-group">
+              <legend>Where does this server send prompts?</legend>
+              <label class="check"><input type="radio" name="endpoint-destination" value="operator_network">Within my network</label>
+              <label class="check"><input type="radio" name="endpoint-destination" value="external">To an external service</label>
+              <p id="endpoint-destination-hint" class="hint">Declared once for every model on this server. Poundlock never guesses it.</p>
+            </fieldset>
+            <label>API key<input id="endpoint-key" type="password" placeholder="Optional for local servers"></label>
+            <label id="endpoint-clear-row" hidden><input id="endpoint-clear-key" type="checkbox"> Remove the saved API key</label>
+            <p id="endpoint-edit-note" class="hint" hidden>Leave the API key blank to keep the saved key. Moving the endpoint to another host, port or scheme requires entering the key again.</p>
+            <div id="endpoint-managed" hidden>
+              <label>Application access<select id="endpoint-connection-mode"><option value="gateway_only">Shared gateway key</option><option value="managed_applications">Separate application identities and budgets</option></select></label>
+              <p class="hint">Shared access uses the saved gateway key. Separate identities require LiteLLM with a database and an administrative key.</p>
+              <div id="endpoint-managed-policy" hidden>
+                <div class="inline"><label>Maximum spend<input id="endpoint-managed-budget" type="number" min="0.01" step="0.01" placeholder="Required for external models"></label><label>Budget period<select id="endpoint-managed-budget-duration"><option value="">Select a reset period</option><option value="1d">Daily</option><option value="7d">Weekly</option><option value="30d">Monthly</option></select></label></div>
+                <p class="hint">This limit is copied independently to every application identity. External profiles stay blocked until both values are set.</p>
+                <details><summary>Advanced identity limits</summary>
+                  <div class="inline"><label>Key lifetime<input id="endpoint-managed-duration" placeholder="For example, 90d"></label><label>Requests per minute<input id="endpoint-managed-rpm" type="number" min="1" placeholder="Optional"></label></div>
+                  <label>Tokens per minute<input id="endpoint-managed-tpm" type="number" min="1" placeholder="Optional"></label>
+                </details>
+              </div>
+            </div>
+            <button id="endpoint-save">Save endpoint</button> <button id="endpoint-cancel" type="button" class="secondary" hidden>Cancel edit</button>
+          </form>
+          <div class="panel">
+            <h3>Configured endpoints</h3>
+            <div id="configured" class="list empty">No endpoints configured.</div>
+          </div>
+        </div>
+      </section>
+
+      <section id="access" class="tab">
+        <div class="grid two">
+          <form id="api-token-form" class="panel">
+            <h3>Create an API token</h3>
+            <p class="hint">Give each editor or integration its own token. A token sees and cancels only the jobs it submitted; all jobs share one queue and the same runners. The administrator token is for Models, Connections and Machines — do not paste it into Poundlock Dispatch.</p>
+            <label>Name<input id="api-token-name" required maxlength="80" placeholder="Development laptop"></label>
+            <fieldset>
+              <legend>Permissions</legend>
+              <label class="check"><input type="checkbox" name="api-permission" value="models:read" checked>List available models</label>
+              <label class="check"><input type="checkbox" name="api-permission" value="jobs:read">Read its own jobs and results</label>
+              <label class="check"><input type="checkbox" name="api-permission" value="jobs:submit">Submit jobs with supplied files</label>
+              <label class="check"><input type="checkbox" name="api-permission" value="jobs:cancel">Cancel its own jobs</label>
+              <label class="check"><input type="checkbox" name="api-permission" value="inference:invoke" checked>Send inference requests</label>
+              <label class="check"><input type="checkbox" name="api-permission" value="inference:priority">Go ahead of other work when a model is busy</label>
+              <p class="hint">For an application a person is waiting on, such as Dispatch's manager or a chat app like Open WebUI: a request that names no priority waits as yours. Without it, every request waits in line as ordinary work.</p>
+              <label class="check"><input type="checkbox" name="api-permission" value="external:invoke">Allow prompts and files to leave the controlled network</label>
+              <p class="hint">Required for profiles marked External. This may send private data and use paid services.</p>
+            </fieldset>
+            <button>Create token</button>
+            <div id="api-token-issued" class="issued" data-reveal hidden>
+              <strong>Copy this token now</strong>
+              <p class="hint">It will not be shown again.</p>
+              <div class="secret-row"><input id="api-token-secret" data-secret readonly><button id="copy-api-token" type="button" class="secondary">Copy</button></div>
+              <button id="copied-api-token" type="button" class="secondary">I copied it</button>
+            </div>
+          </form>
+          <div class="panel">
+            <h3>Application tokens</h3>
+            <div id="api-token-list" class="list empty">No application tokens.</div>
+          </div>
+          <div class="panel">
+            <h3>LiteLLM client identities</h3>
+            <p class="hint">Shown only for gateways where separate application identities are enabled. Failed and pending revocations are retried automatically.</p>
+            <div id="managed-identity-list" class="list empty">No managed identities.</div>
+            <button id="reconcile-managed-identities" type="button" class="secondary">Retry pending revocations</button>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <div id="model-drawer-backdrop" class="drawer-backdrop" hidden></div>
+    <aside id="model-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="model-drawer-title" hidden>
+      <header class="drawer-header">
+        <h3 id="model-drawer-title">New model</h3>
+        <span id="model-drawer-dirty" class="dirty-indicator" hidden>Unsaved changes</span>
+        <button type="button" id="model-drawer-close" class="secondary" aria-label="Close">&times;</button>
+      </header>
+      <div class="drawer-body">
+        <ol id="model-steps" class="steps" aria-label="Steps" hidden>
+          <li data-step="source">Where it runs</li>
+          <li data-step="model">Which model</li>
+          <li data-step="review">Review</li>
+        </ol>
+        <section id="model-step-source" class="model-step" hidden>
+          <fieldset>
+            <legend>Machines Poundlock manages</legend>
+            <div id="source-machines" class="choices"></div>
+          </fieldset>
+          <fieldset>
+            <legend>Servers that are always running</legend>
+            <div id="source-servers" class="choices"></div>
+          </fieldset>
+          <p class="hint">Another server? Add it on <a href="#connections" id="source-connect">Connections</a> first.</p>
+          <label id="source-endpoint-row" hidden><span id="source-endpoint-label">Poundlock reaches this machine's model server through</span><select id="source-endpoint"></select></label>
+          <p id="source-endpoint-hint" class="hint" hidden></p>
+        </section>
+        <section id="model-step-model" class="model-step" hidden>
+          <p id="model-choices-title" class="eyebrow">Models</p>
+          <div id="model-choices" class="choices" role="radiogroup" aria-labelledby="model-choices-title"></div>
+          <p id="model-choices-note" class="hint" role="status"></p>
+          <label>Not listed? Enter a server model ID by hand<input id="model-manual-id" autocomplete="off" spellcheck="false"></label>
+          <label id="model-manual-runtime-row" hidden>Model management for this ID<select id="model-manual-runtime"></select></label>
+          <p class="hint">A model that already has a name can get a second one, for example with a different limit.</p>
+        </section>
+        <form id="model-form">
+          <div id="model-identity" class="identity" hidden></div>
+          <div id="model-route-banner" class="notice" role="status" hidden></div>
+          <label>Model name<input id="model-name" required autocomplete="off" spellcheck="false"></label>
+          <p id="model-name-hint" class="hint">Clients send exactly this. It is not the server's own model ID. It cannot be changed after the model is added.</p>
+          <div id="model-runs-on" class="summary" hidden></div>
+          <fieldset id="model-where">
+            <legend>Where it runs</legend>
+            <label>Server<select id="model-endpoint" required></select></label>
+            <label>Machine<select id="model-node"><option value="">None: the server is always running</option></select></label>
+            <label id="model-runtime-row" hidden>Model management<select id="model-runtime"></select></label>
+            <p id="model-runtime-hint" class="hint" hidden></p>
+            <label>Server model ID<input id="model-id" list="model-id-options" required autocomplete="off" spellcheck="false"></label>
+            <datalist id="model-id-options"></datalist>
+            <p id="model-ids-note" class="hint" role="status">What the server calls this model. Clients never send it.</p>
+            <button id="list-model-ids" type="button" class="secondary" hidden>Try again</button>
+          </fieldset>
+          <fieldset id="model-wake-group" hidden>
+            <legend>When a request arrives</legend>
+            <label class="check"><input type="radio" name="model-wake" value="never">I keep it running</label>
+            <label class="check"><input type="radio" name="model-wake" value="manual">Start the model, don't wake the machine</label>
+            <label class="check"><input type="radio" name="model-wake" value="on-demand">Wake the machine and start the model</label>
+            <p id="wake-hint" class="hint"></p>
+          </fieldset>
+          <fieldset id="model-uses">
+            <legend>What is it for?</legend>
+            <label class="check"><input type="radio" name="model-use" value="durable">Agent jobs</label>
+            <label class="check"><input type="radio" name="model-use" value="interactive">Interactive requests</label>
+            <label class="check"><input type="radio" name="model-use" value="durable,interactive" checked>Agent jobs and interactive requests</label>
+            <label class="check"><input type="radio" name="model-use" value="completion">Autocomplete (FIM)</label>
+          </fieldset>
+          <div id="model-limits-summary" class="summary" hidden></div>
+          <div id="model-limits">
+            <div class="inline"><label>Context tokens<input id="model-context" type="number" placeholder="From the server" min="1024" required></label><label>Output tokens<input id="model-output" type="number" min="1" required></label></div>
+            <p id="model-budget-hint" class="hint">Use the server's own context limit. Agent jobs need at least 8,192.</p>
+          </div>
+          <div id="model-route-facts" class="route-facts" hidden>
+            <p class="eyebrow">ROUTE FACTS</p>
+            <dl class="node-facts"></dl>
+          </div>
+          <details id="model-advanced"><summary>Advanced</summary>
+            <label>Thinking<select id="model-thinking"><option value="model_default">Model default</option><option value="off">Off</option></select></label>
+            <p id="model-thinking-hint" class="hint">Off is faster for most local reasoning models. It applies unless a request states its own reasoning preference.</p>
+            <label class="check"><input type="checkbox" id="model-alias-server-id">Also accept the server model ID as a name</label>
+            <p id="model-alias-hint" class="hint">For a client set up with the server's own ID. It is not listed in /v1/models, and no other model can use it.</p>
+            <label>Compatibility aliases<input id="model-aliases" placeholder="Optional other names, separated by commas" autocomplete="off" spellcheck="false"></label>
+            <p class="hint">Earlier names clients still send. They work like the model name but are not listed.</p>
+            <label>Model label (optional)<input id="model-label" maxlength="256" placeholder="Model family, size and quantization"></label>
+            <p class="hint">Display only. Leave blank if you don't know what the server loaded.</p>
+            <label>Capability evidence (optional)<textarea id="model-capabilities" rows="6" placeholder="Paste the JSON block from scripts/toolkit-capabilities.py"></textarea></label>
+            <p class="hint">Replaces this model's stored evidence. Leave blank to keep it.</p>
+            <label id="model-idle-row" hidden>Keep loaded after the last request, in seconds<input id="model-idle" type="number" min="0" max="3600" value="0"><span class="hint">Ollama only. 0 unloads at once; at most 3600.</span></label>
+          </details>
+          <p id="model-destination-inherited" class="summary" hidden></p>
+          <fieldset id="model-destination-group">
+            <legend id="model-destination-legend">Where do prompts go?</legend>
+            <label class="check"><input type="radio" name="model-destination" value="operator_network">Within my network</label>
+            <label class="check"><input type="radio" name="model-destination" value="external">To an external service</label>
+            <p id="model-destination-hint" class="hint">Required. Count any gateway routing and fallback. Poundlock never guesses this.</p>
+          </fieldset>
+          <ul id="model-problems" class="problems" role="status" hidden></ul>
+          <p id="model-publish-note" class="hint">Nothing is published until you save.</p>
+        </form>
+      </div>
+      <footer class="drawer-footer">
+        <button type="button" id="model-back" class="secondary" hidden>Back</button>
+        <button type="button" id="model-next" hidden>Next</button>
+        <button type="submit" form="model-form" id="model-save">Add model</button>
+        <button type="button" id="model-save-test" class="secondary" hidden>Add and test</button>
+        <button type="button" id="model-cancel" class="secondary">Cancel</button>
+      </footer>
+  </aside>
+  <script src="/app.js"></script>
+  <script src="/jobs.js"></script>
+  <script src="/connections.js"></script>
+  <script src="/models.js"></script>
+  <script src="/gateway-handoff.js"></script>
+  <script src="/machines.js"></script>
+</body>
+</html>

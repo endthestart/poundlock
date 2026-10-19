@@ -1,0 +1,52 @@
+name: poundlock-litellm-example
+
+services:
+  gateway:
+    image: ${LITELLM_IMAGE:?Set LITELLM_IMAGE to a reviewed immutable reference}
+    command: ["--config", "/app/config.yaml", "--port", "4000"]
+    restart: unless-stopped
+    depends_on:
+      database:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql://litellm:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}@database:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?Set LITELLM_MASTER_KEY}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?Set LITELLM_SALT_KEY}
+      STORE_MODEL_IN_DB: "True"
+    ports:
+      - "${LITELLM_LISTEN_ADDRESS:-127.0.0.1}:${LITELLM_PORT:-4000}:4000"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=256m
+      - /app/cache:rw,noexec,nosuid,size=256m
+      - /app/migrations:rw,noexec,nosuid,size=128m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/liveliness')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  database:
+    image: ${POSTGRES_IMAGE:?Set POSTGRES_IMAGE to a reviewed immutable reference}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: litellm
+      POSTGRES_USER: litellm
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD}
+    volumes:
+      - database:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U litellm -d litellm"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+
+volumes:
+  database:

@@ -1,0 +1,1462 @@
+/* Poundlock operator console.
+   Colour comes only from theme.css custom properties (color-mix() with those
+   variables, and `transparent`, are fine). This file is the layout/type/
+   component layer on top of that palette. Sections:
+     1. Base (fonts, resets, canvas)
+     2. Layout (header, main, grid)
+     3. Components
+     4. States (status/verification colour treatments)
+     5. Motion
+     6. Responsive
+*/
+
+/* ------------------------------------------------------------ 1. Base --- */
+
+@font-face {
+  font-family: "Inter";
+  src: url("/fonts/inter.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("/fonts/jetbrains-mono.woff2") format("woff2");
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+:root {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  --content-max: 1680px;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+[hidden] {
+  display: none !important;
+}
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+html {
+  font-family: var(--font-sans);
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: var(--canvas);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.45;
+  font-variant-numeric: tabular-nums;
+  position: relative;
+}
+/* The only ornament: two very faint radial washes from the top corners. */
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background:
+    radial-gradient(1200px 620px at 18% -8%, color-mix(in srgb, var(--wash-a) 8%, transparent), transparent 60%),
+    radial-gradient(980px 520px at 88% 4%, color-mix(in srgb, var(--wash-b) 7%, transparent), transparent 60%);
+}
+main,
+header {
+  position: relative;
+  z-index: 1;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  font-family: var(--font-sans);
+  color: var(--text);
+}
+code,
+pre,
+.mono {
+  font-family: var(--font-mono);
+}
+a {
+  color: var(--accent-text);
+}
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent);
+}
+
+:is(button, a, summary, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 3px;
+}
+
+/* --------------------------------------------------------- 2. Layout --- */
+
+header {
+  height: 60px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 0 max(20px, calc((100vw - var(--content-max)) / 2));
+  background: var(--canvas);
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-bottom: 1px solid var(--line);
+}
+header::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 1px;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2));
+  opacity: 0.5;
+}
+.header-title {
+  display: flex;
+  align-items: baseline;
+  gap: 14px;
+  min-width: 0;
+}
+.header-title h1 {
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+.header-title .lede {
+  color: var(--faint);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex: 0 0 auto;
+}
+.status {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--faint);
+  font-size: 11.5px;
+}
+#status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--state-unknown);
+  flex: 0 0 auto;
+}
+.status.online #status-dot {
+  background: var(--state-ok);
+  animation: breathe 2s ease-in-out infinite;
+}
+#theme-menu {
+  width: auto;
+  background: var(--s2);
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  padding: 5px 8px;
+}
+
+main {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  padding: 20px 24px 64px;
+}
+
+.grid {
+  display: grid;
+  gap: 14px;
+}
+.grid.two {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.grid.three {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 24px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.hero h2 {
+  font-size: 15px;
+  font-weight: 650;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.hero p:not(.hint) {
+  color: var(--muted);
+  max-width: 620px;
+  font-size: 12.5px;
+  margin: 4px 0 0;
+}
+.hero.panel {
+  align-items: center;
+  margin-top: 8vh;
+  max-width: 620px;
+  margin-left: auto;
+  margin-right: auto;
+  gap: 20px;
+}
+.hero-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+/* -------------------------------------------------- 3. Components ------ */
+
+/* -- Panel / surface ramp ------------------------------------------------ */
+.panel {
+  background: linear-gradient(180deg, var(--s2), var(--s1));
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px 18px;
+}
+.panel > h3,
+.panel > .section-heading {
+  margin-top: 0;
+}
+
+/* Section headings: 10.5px uppercase, .15em tracking, weight 600, --faint,
+   with a small accent glyph prefix. Used in place of oversized <h3>s. */
+h3,
+.section-heading {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.15em;
+  font-weight: 600;
+  color: var(--faint);
+  margin: 0 0 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+h3::before,
+.section-heading::before {
+  content: "▍";
+  color: var(--accent);
+  font-size: 10px;
+  line-height: 1;
+}
+h4 {
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--muted);
+  margin: 12px 0 8px;
+  letter-spacing: 0.02em;
+}
+.eyebrow {
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--faint);
+  font-weight: 600;
+  margin: 0 0 4px;
+}
+.optional {
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: normal;
+}
+
+/* -- Metric strip --------------------------------------------------------- */
+.metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(122px, 1fr));
+  gap: 1px;
+  background: var(--line);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+  margin: 0 0 14px;
+}
+.metric {
+  background: linear-gradient(180deg, var(--s2), var(--s1));
+  padding: 12px 14px 11px;
+  position: relative;
+}
+.metric::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--line);
+}
+.metric.attention::after {
+  background: var(--state-active);
+}
+.metric.warn::after {
+  background: var(--state-fault);
+}
+.metric.ended::after {
+  background: var(--state-ended);
+}
+.metric strong {
+  display: block;
+  font-size: 27px;
+  font-weight: 650;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+}
+.metric span {
+  display: block;
+  margin-top: 5px;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.13em;
+  color: var(--faint);
+}
+.occupancy {
+  margin: 0 0 16px;
+}
+
+/* -- Tabs / segmented ------------------------------------------------------ */
+.tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+.tabs button {
+  background: none;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  padding: 9px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tabs button:hover {
+  background: var(--s2);
+  transition: background 160ms;
+}
+.tabs button.active {
+  color: var(--text);
+  border-color: var(--accent);
+}
+.tab {
+  display: none;
+}
+.tab.active {
+  display: block;
+}
+
+.segmented {
+  display: inline-flex;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+  background: var(--s2);
+}
+.seg-btn {
+  background: none;
+  border: 0;
+  border-radius: 999px;
+  color: var(--muted);
+  padding: 6px 14px;
+  font-size: 11.5px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 160ms, color 160ms;
+}
+.seg-btn.active {
+  background: var(--s3);
+  color: var(--text);
+}
+.model-view {
+  display: none;
+}
+.model-view.active {
+  display: block;
+}
+
+/* -- List rows: indicator · name · trailing meta -------------------------- */
+.list {
+  display: flex;
+  flex-direction: column;
+}
+.empty {
+  color: var(--faint);
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  padding: 40px 20px;
+  text-align: center;
+  font-size: 12px;
+  line-height: 1.6;
+}
+.empty span {
+  display: block;
+}
+.empty span + span {
+  margin-top: 4px;
+  color: var(--faint);
+  opacity: 0.8;
+}
+.item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 4px;
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+  transition: background 160ms;
+}
+.item:last-child {
+  border-bottom: 0;
+}
+.item:hover {
+  background: var(--s3);
+}
+#job-list button.item {
+  display: flex;
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: inherit;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  font: inherit;
+  font-weight: inherit;
+  cursor: pointer;
+}
+#node-list .item {
+  cursor: default;
+  align-items: flex-start;
+}
+.item > strong {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  flex: 0 1 auto;
+}
+.item .meta {
+  min-width: 0;
+  max-width: 100%;
+  color: var(--faint);
+  font-size: 11px;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  align-items: center;
+  font-family: var(--font-mono);
+}
+/* The first meta line trails the name on the same row; any further meta
+   lines (second/third rows of detail) wrap onto their own line below. */
+.item > .meta:first-of-type {
+  margin-left: auto;
+}
+.item > .meta:not(:first-of-type) {
+  flex-basis: 100%;
+  margin-left: 0;
+}
+.item .meta span {
+  white-space: nowrap;
+}
+.item .hint {
+  flex-basis: 100%;
+}
+.item-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 4px;
+  flex-basis: 100%;
+}
+/* A row's leading colour dot/tick — the only colour source in the row. */
+.row-indicator {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--state-unknown);
+}
+.row-indicator.tick {
+  width: 3px;
+  height: 13px;
+  border-radius: 1px;
+}
+.row-indicator.dashed {
+  background: transparent;
+  border: 1px dashed var(--state-unknown);
+  border-radius: 50%;
+}
+/* Row-indicator state buckets, shared with the .badge state buckets below. */
+.row-indicator.ok {
+  background: var(--state-ok);
+}
+.row-indicator.active {
+  background: var(--state-active);
+}
+.row-indicator.review {
+  background: var(--state-review);
+}
+.row-indicator.fault {
+  background: var(--state-fault);
+}
+.row-indicator.ended {
+  background: transparent;
+  border: 1px dashed var(--state-ended);
+}
+.row-indicator.unknown {
+  background: transparent;
+  border: 1px dashed var(--state-unknown);
+}
+.row-indicator.unrecognised {
+  background: var(--state-unrecognised);
+}
+
+/* -- Badges / pills / letter badges ---------------------------------------- */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 8px;
+  text-transform: uppercase;
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  font-weight: 650;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.badge::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: currentColor;
+}
+.pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 1px 7px;
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  background: var(--s3);
+  white-space: nowrap;
+}
+/* Monochrome grouping badge: text at 9% fill, 28% border. */
+.letter-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-size: 9px;
+  font-weight: 700;
+  flex: 0 0 auto;
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--text) 28%, transparent);
+}
+/* Ownership chip: colour = one of --own-1..5, set inline via style. */
+.own-chip {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex: 0 0 auto;
+  background: var(--own-color, var(--own-1));
+}
+
+/* -- Buttons ---------------------------------------------------------------- */
+button {
+  border: 0;
+  border-radius: 5px;
+  background: var(--accent-fill);
+  color: var(--on-accent);
+  padding: 7px 13px;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition: background 160ms, opacity 160ms;
+}
+button:hover {
+  background: color-mix(in srgb, var(--accent-fill) 88%, var(--text) 12%);
+}
+button.secondary {
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+}
+button.secondary:hover {
+  background: var(--s3);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: wait;
+}
+button.danger,
+#cancel-job {
+  background: transparent;
+  color: var(--state-fault-text);
+  border: 1px solid var(--state-fault);
+}
+button.danger:hover,
+#cancel-job:hover {
+  background: color-mix(in srgb, var(--state-fault) 12%, transparent);
+}
+.button-link {
+  display: inline-flex;
+  align-items: center;
+  text-decoration: none;
+  border-radius: 5px;
+  padding: 7px 13px;
+  font-size: 12px;
+  font-weight: 650;
+  background: transparent;
+  color: var(--text);
+  border: 1px solid var(--line);
+  transition: background 160ms;
+}
+.button-link:hover {
+  background: var(--s3);
+}
+
+/* -- Forms -------------------------------------------------------------- */
+form {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+label {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+fieldset {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 0;
+}
+legend {
+  color: var(--faint);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 650;
+  padding: 0 5px;
+}
+.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin: 4px 0;
+  font-weight: 500;
+  color: var(--text);
+}
+.check input {
+  width: auto;
+}
+input,
+select,
+textarea {
+  width: 100%;
+  background: var(--s1);
+  border: 1px solid var(--line-strong);
+  border-radius: 5px;
+  color: var(--text);
+  padding: 7px 9px;
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+input::placeholder,
+textarea::placeholder {
+  color: var(--faint);
+  opacity: 1;
+}
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+}
+textarea {
+  resize: vertical;
+}
+input[readonly] {
+  background: var(--s3);
+  color: var(--muted);
+}
+/* Prose (a task description) stays sans; commands, paths and pasted JSON are
+   identifiers, so they read in mono. */
+#job-commands,
+#job-protected,
+#project-roots,
+#project-instructions,
+#model-capabilities {
+  font-family: var(--font-mono);
+}
+.inline {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.hint {
+  font-size: 11px !important;
+  color: var(--faint);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.issued {
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--accent) 6%, transparent);
+}
+.secret-row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+.secret-row button {
+  flex: 0 0 auto;
+}
+#wake-panel input[readonly] {
+  color: var(--faint);
+}
+
+/* Two-column form grids on wide screens for the two-up panels. */
+@media (min-width: 901px) {
+  .grid.two form.panel .inline,
+  .grid.two form .inline {
+    grid-template-columns: 1fr 1fr;
+  }
+}
+
+/* -- Details / disclosure ------------------------------------------------ */
+details > summary {
+  cursor: pointer;
+  color: var(--muted);
+  margin: 6px 0;
+  font-size: 12px;
+}
+details > summary:hover {
+  color: var(--text);
+}
+.setup-guide {
+  margin-bottom: 14px;
+  scroll-margin-top: 76px;
+  line-height: 1.6;
+}
+.setup-guide > summary {
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--text);
+  text-transform: none;
+  letter-spacing: normal;
+}
+.setup-guide p,
+.setup-guide li {
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.setup-guide details {
+  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 6px;
+}
+.setup-guide h4 {
+  margin-bottom: 6px;
+}
+#enroll-form h4 {
+  margin: 10px 0 0;
+}
+.resource-links {
+  padding-left: 18px;
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--muted);
+}
+.resource-links li {
+  margin: 8px 0;
+}
+
+/* -- Code / pre / diff ----------------------------------------------------- */
+pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--s1);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+  max-height: 480px;
+  overflow: auto;
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+.diff {
+  white-space: pre !important;
+}
+.diff-add {
+  color: var(--state-ok-text);
+}
+.diff-remove {
+  color: var(--state-fault-text);
+}
+.patch-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.patch-heading h4 {
+  overflow-wrap: anywhere;
+  margin: 0;
+}
+
+/* -- dl facts --------------------------------------------------------------- */
+.node-facts {
+  display: grid;
+  grid-template-columns: minmax(100px, 2fr) minmax(0, 3fr);
+  gap: 6px 14px;
+  font-size: 12px;
+  line-height: 1.45;
+  margin: 8px 0;
+}
+.node-facts dt {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+.node-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  font-family: var(--font-mono);
+}
+.route-facts {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin: 4px 0;
+  background: var(--s3);
+}
+
+/* -- Model names and notices -------------------------------------------------- */
+/* The two strings a model has, each with its own copy button. */
+.identity,
+.item .meta.model-names {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+.identity {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--s3);
+  font-size: 11.5px;
+}
+.identity code,
+.model-names code {
+  color: var(--text);
+  overflow-wrap: anywhere;
+}
+button.copy {
+  padding: 1px 7px;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+/* Something the operator should know before saving, said instead of done. */
+.notice {
+  border: 1px solid var(--state-review);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--state-review-text);
+  background: color-mix(in srgb, var(--state-review) 10%, transparent);
+  font-size: 11.5px;
+}
+fieldset .check {
+  margin: 2px 0;
+}
+/* Add a model: the step indicator, choice rows and derived-value summaries. */
+.steps {
+  display: flex;
+  gap: 6px;
+  list-style: none;
+  margin: 0 0 12px;
+  padding: 0;
+  counter-reset: step;
+  font-size: 11px;
+}
+.steps li {
+  counter-increment: step;
+  color: var(--faint);
+  flex: 1;
+  border-bottom: 2px solid var(--line);
+  padding-bottom: 4px;
+}
+.steps li::before {
+  content: counter(step) ". ";
+}
+.steps li.done {
+  color: var(--muted);
+  border-color: var(--accent);
+}
+.steps li[aria-current="step"] {
+  color: var(--text);
+  font-weight: 650;
+  border-color: var(--accent);
+}
+.model-step {
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
+}
+.choices {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.choice {
+  flex-direction: row;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 6px;
+  color: var(--text);
+  font-weight: 500;
+  cursor: pointer;
+}
+.choice:hover,
+.choice:has(input:checked) {
+  background: var(--s3);
+}
+.choice input {
+  width: auto;
+  margin-top: 2px;
+}
+.choice > span {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.summary {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.summary strong,
+.summary code {
+  color: var(--text);
+}
+.problems {
+  margin: 0;
+  padding: 8px 10px 8px 26px;
+  border: 1px solid var(--state-fault);
+  border-radius: 8px;
+  color: var(--state-fault-text);
+  font-size: 11.5px;
+}
+
+/* -- Job detail / results --------------------------------------------------- */
+.detail {
+  margin-top: 14px;
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.detail header {
+  position: static;
+  height: auto;
+  padding: 0;
+  background: none;
+  border: 0;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.detail header h3 {
+  overflow-wrap: anywhere;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 13px;
+  color: var(--text);
+}
+.detail header h3::before {
+  content: none;
+}
+.detail .actions {
+  display: flex;
+  gap: 8px;
+}
+.detail > details {
+  margin-top: 12px;
+}
+.result-summary {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.result-summary span {
+  color: var(--faint);
+}
+.check-ok {
+  color: var(--state-ok-text);
+}
+.check-fail {
+  color: var(--state-fault-text);
+}
+.check-none {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--state-unknown-text);
+}
+.check-none::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  border: 1px dashed var(--state-unknown);
+}
+
+/* -- Machines-specific spacing ----------------------------------------------- */
+#nodes .grid.two {
+  align-items: start;
+}
+.machine-management {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+}
+#removed-machines {
+  margin-top: 14px;
+}
+#node-list details {
+  margin-top: 10px;
+  flex-basis: 100%;
+}
+#node-list .hint {
+  margin: 8px 0;
+}
+#node-list summary {
+  line-height: 1.5;
+}
+#wake-panel > label,
+#wake-panel > .hint,
+#wake-panel > button {
+  margin-bottom: 10px;
+}
+#wake-panel form {
+  margin-top: 12px;
+}
+
+/* -- Models tab -------------------------------------------------------------- */
+.models-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.model-group-panel {
+  margin-bottom: 12px;
+}
+.model-group-panel h4 {
+  margin: 0 0 8px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--faint);
+}
+.verify-results {
+  margin: 6px 0;
+}
+.discover-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 6px;
+}
+.discover-gateway {
+  margin-bottom: 12px;
+}
+.discover-gateway h4 {
+  margin: 0 0 8px;
+}
+.discover-filters {
+  display: grid;
+  grid-template-columns: 2fr 1fr auto;
+  gap: 10px;
+  align-items: end;
+  margin: 10px 0;
+}
+.publish-form {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  flex-basis: 100%;
+}
+.route-test-result {
+  min-height: 1em;
+  flex-basis: 100%;
+}
+.legend-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  font-size: 11px;
+  color: var(--faint);
+  margin: 0 0 10px;
+}
+.legend-row .legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+/* -- Connections / access ----------------------------------------------------- */
+#configured table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+th,
+td {
+  text-align: left;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+th {
+  color: var(--faint);
+  font-weight: 600;
+}
+
+/* -- Toast -------------------------------------------------------------------- */
+#toast {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  background: var(--s4);
+  color: var(--text);
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 200ms, transform 200ms;
+  pointer-events: none;
+  max-width: min(420px, calc(100vw - 40px));
+  z-index: 20;
+}
+#toast.show {
+  opacity: 1;
+  transform: none;
+}
+.error {
+  color: var(--state-fault-text);
+}
+#toast.error {
+  border-color: var(--state-fault);
+}
+
+/* -- Empty states ------------------------------------------------------------- */
+.empty {
+  /* two lines: what is absent, then what to do; content supplies both */
+}
+
+/* -- Drawer ------------------------------------------------------------------- */
+.drawer-backdrop {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--canvas) 55%, transparent);
+  z-index: 9;
+}
+.drawer {
+  position: fixed;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(460px, 100vw);
+  background: linear-gradient(180deg, var(--s2), var(--s1));
+  border-left: 1px solid var(--line);
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+}
+.drawer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-header h3 {
+  margin: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+  text-transform: none;
+  letter-spacing: normal;
+  font-size: 13px;
+  color: var(--text);
+  display: block;
+}
+.drawer-header h3::before {
+  content: none;
+}
+.dirty-indicator {
+  color: var(--state-review-text);
+  font-size: 11px;
+  font-weight: 650;
+}
+.drawer-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px 18px;
+}
+.drawer-footer {
+  display: flex;
+  gap: 10px;
+  padding: 14px 18px;
+  border-top: 1px solid var(--line);
+}
+
+/* -------------------------------------------------------- 4. States ---- */
+
+/* Semantic state buckets. Every status mapper (job status, node status, token/
+   identity status, verification result, route publish state, ...) resolves
+   to one of these classes rather than inventing its own colour. */
+.badge.ok,
+.badge.passed,
+.badge.completed {
+  color: var(--state-ok-text);
+  border-color: var(--state-ok);
+  background: color-mix(in srgb, var(--state-ok) 12%, transparent);
+}
+.badge.active,
+.badge.running,
+.badge.preparing,
+.badge.ready {
+  color: var(--state-active-text);
+  border-color: var(--state-active);
+  background: color-mix(in srgb, var(--state-active) 12%, transparent);
+}
+.badge.review,
+.badge.maintenance,
+.badge.submitted,
+.badge.waiting_node,
+.badge.waiting_capacity {
+  color: var(--state-review-text);
+  border-color: var(--state-review);
+  background: color-mix(in srgb, var(--state-review) 12%, transparent);
+}
+.badge.fault,
+.badge.failed {
+  color: var(--state-fault-text);
+  border-color: var(--state-fault);
+  background: color-mix(in srgb, var(--state-fault) 12%, transparent);
+}
+/* Ended/taken-out-of-service: muted and dashed, never the fault colour. */
+.badge.ended,
+.badge.cancelled,
+.badge.revoked {
+  color: var(--state-ended-text);
+  border-color: var(--state-ended);
+  border-style: dashed;
+  background: transparent;
+}
+/* Unknown/not-checked: dashed ring, distinct from "ended". */
+.badge.unknown,
+.badge.unverified,
+.badge.sleeping {
+  color: var(--state-unknown-text);
+  border-color: var(--state-unknown);
+  border-style: dashed;
+  background: transparent;
+}
+/* A status value this UI does not recognise — the default branch of a status
+   mapper, and used nowhere else. */
+.badge.unrecognised {
+  color: var(--state-unrecognised-text);
+  border-color: var(--state-unrecognised);
+  background: color-mix(in srgb, var(--state-unrecognised) 14%, transparent);
+}
+/* A plain badge with no semantic state class keeps the neutral --muted
+   colour set on .badge itself above. */
+
+/* ------------------------------------------------------------ 5. Motion --- */
+
+@keyframes sweep {
+  0% {
+    background-position: -120% 0;
+  }
+  100% {
+    background-position: 220% 0;
+  }
+}
+@keyframes breathe {
+  0%,
+  100% {
+    opacity: 1;
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 60%, transparent);
+  }
+  50% {
+    opacity: 0.55;
+    box-shadow: 0 0 0 6px color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+@keyframes throb {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.82;
+  }
+}
+/* A translucent band sweeping across a row for work currently in flight
+   (e.g. a running job). Applied to the row via .in-flight, not the badge. */
+.in-flight {
+  position: relative;
+  overflow: hidden;
+}
+.in-flight::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    100deg,
+    transparent 0%,
+    color-mix(in srgb, var(--state-active) 30%, transparent) 50%,
+    transparent 100%
+  );
+  background-size: 250% 100%;
+  animation: sweep 2.1s linear infinite;
+}
+.under-load {
+  animation: throb 2.6s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .status.online #status-dot,
+  .in-flight::after,
+  .under-load {
+    animation: none !important;
+  }
+}
+
+/* --------------------------------------------------------- 6. Responsive --- */
+
+@media (max-width: 900px) {
+  .grid.two,
+  .grid.three {
+    grid-template-columns: 1fr;
+  }
+  .hero {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .hero.panel {
+    margin-top: 0;
+  }
+  header {
+    padding: 0 16px;
+  }
+  main {
+    padding: 16px 16px 64px;
+  }
+}
+@media (max-width: 640px) {
+  .drawer {
+    width: 100vw;
+  }
+  /* On a phone a row's meta may wrap rather than widen the page: a long
+     model id or URL breaks inside itself instead. */
+  .item .meta span {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .header-title .lede {
+    display: none;
+  }
+}
+@media (max-width: 560px) {
+  .tabs {
+    flex-wrap: wrap;
+  }
+  .discover-filters {
+    grid-template-columns: 1fr;
+  }
+}
+@media (max-width: 390px) {
+  main {
+    padding: 12px 12px 56px;
+  }
+  .metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

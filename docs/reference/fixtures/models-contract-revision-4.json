@@ -1,0 +1,82 @@
+{
+  "object": "list",
+  "poundlock": {
+    "contract_revision": 4,
+    "schema_version": 1
+  },
+  "data": [
+    {
+      "id": "frontier-gpt-sol",
+      "object": "model",
+      "owned_by": "poundlock",
+      "context_length": 131072,
+      "context_window": 131072,
+      "context_tokens": 131072,
+      "max_output_tokens": 8192,
+      "busy": false,
+      "occupancy": {
+        "kind": null,
+        "slot": null,
+        "node_id": null,
+        "runtime_profile": null
+      },
+      "meta": {
+        "n_ctx": 131072
+      },
+      "poundlock": {
+        "kind": "profile",
+        "profile_id": "8f0c7a52-3f0e-4c47-9a57-0d5b8f4e2a10",
+        "canonical_name": "frontier-gpt-sol",
+        "aliases": [],
+        "upstream_model": "frontier-gpt-sol",
+        "model_label": null,
+        "endpoint_kind": "litellm",
+        "routing_revision": "rev-9c1d",
+        "data_destination": "external",
+        "thinking": "model_default",
+        "uses": [
+          "interactive"
+        ],
+        "workload_class": "interactive-coding",
+        "wake_policy": "never",
+        "context_tokens": 131072,
+        "max_output_tokens": 8192,
+        "n_ctx": 131072,
+        "capabilities": [],
+        "reasoning": {
+          "supported": [
+            "none",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "default": "model_default",
+          "verified_at": "2026-09-23T14:05:00Z"
+        },
+        "served_model": "openrouter/openai/gpt-6-sol",
+        "provider": "openrouter",
+        "pricing": {
+          "input_per_mtok": 2.0,
+          "output_per_mtok": 10.0,
+          "source": "litellm_route",
+          "refreshed_at": "2026-09-23T14:00:00Z"
+        },
+        "status": "disabled",
+        "disabled": {
+          "reason": "HTTP 404: upstream reported \"no endpoints found\"",
+          "source": "relay",
+          "since": "2026-09-23T15:00:00Z",
+          "last_check": "2026-09-23T15:00:00Z"
+        },
+        "busy": false,
+        "occupancy": {
+          "kind": null,
+          "slot": null,
+          "node_id": null,
+          "runtime_profile": null
+        }
+      }
+    }
+  ]
+}

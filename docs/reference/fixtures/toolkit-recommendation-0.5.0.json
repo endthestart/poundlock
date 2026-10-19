@@ -1,0 +1,187 @@
+{
+  "evaluated_at": "2026-10-17T02:30:40.086348+00:00",
+  "investigation_pairs": [
+    {
+      "absent": {
+        "attempted": 3,
+        "level": "repeated task qualification",
+        "passed": 3
+      },
+      "absent_run_id": "ae128398-f460-4464-ae67-106d087d2b74",
+      "findable": {
+        "attempted": 3,
+        "level": "repeated task qualification",
+        "passed": 3
+      },
+      "findable_run_id": "158dd1a7-c6fa-47bd-b262-0a75f60c281b",
+      "identity_sha256": "f29a3a78611597da826be43701b7c35c379da46bb9b62320ad00023afdd61d89",
+      "qualified": true
+    }
+  ],
+  "results": [
+    {
+      "created_at": "2026-10-17T02:30:40.006811+00:00",
+      "harness": "pi",
+      "identity_sha256": "f29a3a78611597da826be43701b7c35c379da46bb9b62320ad00023afdd61d89",
+      "investigation_variant": null,
+      "result_schema": "urn:poundlock-toolkit:qualification:1",
+      "result_sha256": "ab20324f877226f08c6183a2538aba13983951f69995bd4076bfd3c0d987e561",
+      "run_id": "45262d3b-0fd7-4a3f-adef-380cfb66b83b",
+      "settings": {
+        "context_tokens": 8192,
+        "max_output_tokens": 2048,
+        "reasoning": "off",
+        "reasoning_sent": "omitted"
+      },
+      "synthetic": false,
+      "tool_schema": null,
+      "toolkit_version": "0.5.0",
+      "workloads": [
+        {
+          "attempted": 3,
+          "level": "repeated task qualification",
+          "next_required_check": null,
+          "passed": 3,
+          "planned": 3,
+          "workload": "extraction"
+        },
+        {
+          "attempted": 3,
+          "level": "repeated task qualification",
+          "next_required_check": null,
+          "passed": 3,
+          "planned": 3,
+          "workload": "coding"
+        },
+        {
+          "attempted": 0,
+          "level": "insufficient evidence",
+          "next_required_check": "repetitions",
+          "passed": 0,
+          "planned": 0,
+          "workload": "investigation"
+        }
+      ]
+    },
+    {
+      "created_at": "2026-10-17T02:30:40.037242+00:00",
+      "harness": "pi",
+      "identity_sha256": "f29a3a78611597da826be43701b7c35c379da46bb9b62320ad00023afdd61d89",
+      "investigation_variant": "findable",
+      "result_schema": "urn:poundlock-toolkit:qualification:1",
+      "result_sha256": "a53c2aba120bd9706c404c197e71d65c28d39c80a57995c5a8fd7e3ec985ff31",
+      "run_id": "158dd1a7-c6fa-47bd-b262-0a75f60c281b",
+      "settings": {
+        "context_tokens": 8192,
+        "max_output_tokens": 2048,
+        "reasoning": "off",
+        "reasoning_sent": "omitted"
+      },
+      "synthetic": false,
+      "tool_schema": null,
+      "toolkit_version": "0.5.0",
+      "workloads": [
+        {
+          "attempted": 0,
+          "level": "insufficient evidence",
+          "next_required_check": "repetitions",
+          "passed": 0,
+          "planned": 0,
+          "workload": "extraction"
+        },
+        {
+          "attempted": 0,
+          "level": "insufficient evidence",
+          "next_required_check": "repetitions",
+          "passed": 0,
+          "planned": 0,
+          "workload": "coding"
+        },
+        {
+          "attempted": 3,
+          "level": "repeated task qualification",
+          "next_required_check": null,
+          "passed": 3,
+          "planned": 3,
+          "workload": "investigation"
+        }
+      ]
+    },
+    {
+      "created_at": "2026-10-17T02:30:40.057456+00:00",
+      "harness": "pi",
+      "identity_sha256": "f29a3a78611597da826be43701b7c35c379da46bb9b62320ad00023afdd61d89",
+      "investigation_variant": "absent",
+      "result_schema": "urn:poundlock-toolkit:qualification:1",
+      "result_sha256": "21e5c74a964192d50e901695c6305c4f78e7362250b2def6666a66a7c8c468e6",
+      "run_id": "ae128398-f460-4464-ae67-106d087d2b74",
+      "settings": {
+        "context_tokens": 8192,
+        "max_output_tokens": 2048,
+        "reasoning": "off",
+        "reasoning_sent": "omitted"
+      },
+      "synthetic": false,
+      "tool_schema": null,
+      "toolkit_version": "0.5.0",
+      "workloads": [
+        {
+          "attempted": 0,
+          "level": "insufficient evidence",
+          "next_required_check": "repetitions",
+          "passed": 0,
+          "planned": 0,
+          "workload": "extraction"
+        },
+        {
+          "attempted": 0,
+          "level": "insufficient evidence",
+          "next_required_check": "repetitions",
+          "passed": 0,
+          "planned": 0,
+          "workload": "coding"
+        },
+        {
+          "attempted": 3,
+          "level": "repeated task qualification",
+          "next_required_check": null,
+          "passed": 3,
+          "planned": 3,
+          "workload": "investigation"
+        }
+      ]
+    },
+    {
+      "created_at": "2026-10-17T02:30:40.078326+00:00",
+      "harness": "direct",
+      "identity_sha256": "107595f7a866f23645ef1418379ef31800cebbc10ec38114bb20681f2939ca16",
+      "investigation_variant": null,
+      "result_schema": "urn:poundlock-toolkit:tool-schema:1",
+      "result_sha256": "9fa7de5a980a20f21a7c6510f550f41cad934c33f74b7545c2b4f465e6c32c8d",
+      "run_id": "522f1293-2d42-4ac5-95cb-fcc4389c6364",
+      "settings": {
+        "context_tokens": 16384,
+        "max_output_tokens": 4096,
+        "reasoning": "off",
+        "reasoning_sent": null
+      },
+      "synthetic": null,
+      "tool_schema": {
+        "boundaries": [
+          {
+            "attempted": 3,
+            "boundary": "openai",
+            "passed": 3,
+            "planned": 3,
+            "reasoning_sent": "omitted"
+          }
+        ],
+        "mode": "qualification"
+      },
+      "toolkit_version": "0.5.0",
+      "workloads": []
+    }
+  ],
+  "schema": "urn:poundlock-toolkit:recommendation:1",
+  "toolkit_version": "0.5.0"
+}

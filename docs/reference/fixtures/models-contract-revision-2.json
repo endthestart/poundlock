@@ -1,0 +1,31 @@
+{
+  "object": "list",
+  "poundlock": {
+    "schema_version": 1,
+    "contract_revision": 2
+  },
+  "data": [
+    {
+      "id": "review-external",
+      "object": "model",
+      "owned_by": "poundlock",
+      "availability": "preparation_required",
+      "availability_reason": "managed_identity_not_provisioned",
+      "blocked_reason": null,
+      "warning_reason": null,
+      "connection_mode": "managed_applications",
+      "poundlock": {
+        "profile_id": "00000000-0000-0000-0000-000000000001",
+        "canonical_name": "review-external",
+        "aliases": [],
+        "endpoint_kind": "litellm",
+        "data_destination": "external",
+        "workload_class": "interactive-coding",
+        "availability": "preparation_required",
+        "availability_reason": "managed_identity_not_provisioned",
+        "blocked_reason": null,
+        "connection_mode": "managed_applications"
+      }
+    }
+  ]
+}

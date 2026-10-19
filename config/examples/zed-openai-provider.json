@@ -1,0 +1,26 @@
+{
+  "language_models": {
+    "openai_compatible": {
+      "poundlock": {
+        "api_url": "http://127.0.0.1:7331/v1",
+        "available_models": [
+          {
+            "name": "coding",
+            "display_name": "Local coding",
+            "max_tokens": 131072
+          }
+        ]
+      }
+    }
+  },
+  "edit_predictions": {
+    "provider": "open_ai_compatible_api",
+    "open_ai_compatible_api": {
+      "api_url": "http://127.0.0.1:7331/v1/completions",
+      "model": "predict",
+      "prompt_format": "qwen",
+      "max_output_tokens": 128,
+      "prediction_debounce": 75
+    }
+  }
+}

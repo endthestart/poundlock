@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>com.poundlock.node</string>
+  <key>UserName</key><string>__POUNDLOCK_USER__</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/__POUNDLOCK_USER__/.local/share/poundlock/bin/poundlock</string>
+    <string>node</string>
+    <string>--controller</string><string>__CONTROLLER_URL__</string>
+    <string>--name</string><string>__NODE_NAME__</string>
+    <string>--config</string><string>__CONFIG_PATH__</string>
+    <string>--credential-file</string><string>__CREDENTIAL_PATH__</string>
+    <string>--data-dir</string><string>/Users/__POUNDLOCK_USER__/.local/share/poundlock</string>
+  </array>
+  <key>KeepAlive</key><true/>
+  <key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>/Users/__POUNDLOCK_USER__/Library/Logs/poundlock-node.log</string>
+  <key>StandardErrorPath</key><string>/Users/__POUNDLOCK_USER__/Library/Logs/poundlock-node.log</string>
+</dict>
+</plist>

@@ -1,0 +1,112 @@
+# Layered on the install's compose.yaml by tests/e2e/run.py. Everything runs on
+# one disposable Docker host with no external model service.
+services:
+  controller:
+    environment:
+      POUNDLOCK_EXTERNAL_TIMEOUT_SECONDS: "5"
+      POUNDLOCK_JOB_INFERENCE_TIMEOUT_SECONDS: "60"
+    depends_on:
+      mock-model:
+        condition: service_healthy
+
+  runner:
+    environment:
+      POUNDLOCK_JOB_WALL_SECONDS: "300"
+
+  mock-model:
+    image: python:3.12-slim@sha256:a6e34c598f2467ed0e9a8d349809fcd8b5c603269512df273a0bb1784edc11b1
+    command: ["python3", "-I", "/srv/mock_model.py", "8080"]
+    volumes:
+      - ./tests/e2e/mock_model.py:/srv/mock_model.py:ro
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/health', timeout=2)"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+  # Full mode only: llama.cpp serving a 105 MB Apache-2.0 model that run.py
+  # downloads and verifies by SHA-256 into tests/e2e/.models.
+  llama:
+    profiles: ["full"]
+    image: ghcr.io/ggml-org/llama.cpp:server@sha256:e83cbdc66e692129e17aad70293366cb00e3acca94b9f197c91a8a56e92201c3
+    command: ["--model", "/models/SmolLM2-135M-Instruct-Q4_K_M.gguf", "--alias", "smollm2-135m",
+              "--host", "0.0.0.0", "--port", "8080", "--ctx-size", "4096", "--threads", "2", "--no-webui"]
+    volumes:
+      - ./tests/e2e/.models:/models:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=64m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:8080/health"]
+      interval: 3s
+      timeout: 3s
+      retries: 40
+
+  # Full mode only: an optional LiteLLM gateway with its database, in front of
+  # the scripted model server. run.py generates the master key and password.
+  litellm-db:
+    profiles: ["full"]
+    image: postgres@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+    environment:
+      POSTGRES_USER: litellm
+      POSTGRES_DB: litellm
+      POSTGRES_PASSWORD: ${E2E_LITELLM_DB_PASSWORD:-}
+    tmpfs:
+      - /var/lib/postgresql/data:rw,nosuid,size=256m
+      - /var/run/postgresql:rw,nosuid,size=8m
+    security_opt: ["no-new-privileges:true"]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "litellm"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  litellm:
+    profiles: ["full"]
+    image: ghcr.io/berriai/litellm@sha256:87f34979b9f8cb274fac90ca8a4fdda07d8480de22755562a26adeb95ce20d02
+    command: ["--config", "/etc/litellm/config.yaml", "--port", "4000"]
+    environment:
+      LITELLM_MASTER_KEY: ${E2E_LITELLM_MASTER_KEY:-}
+      DATABASE_URL: postgresql://litellm:${E2E_LITELLM_DB_PASSWORD:-}@litellm-db:5432/litellm
+      STORE_MODEL_IN_DB: "False"
+      LITELLM_TELEMETRY: "False"
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    volumes:
+      - ./tests/e2e/litellm.yaml:/etc/litellm/config.yaml:ro
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      litellm-db:
+        condition: service_healthy
+      mock-model:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:4000/health/readiness', timeout=3)"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+
+  node:
+    profiles: ["node"]
+    image: ${POUNDLOCK_IMAGE}
+    command: ["node", "--controller", "http://controller:7331", "--name", "e2e-node",
+              "--config", "/etc/poundlock/node.toml", "--credential-file", "/var/lib/poundlock/node-credential.json"]
+    environment:
+      POUNDLOCK_ENROLLMENT_TOKEN: ${POUNDLOCK_ENROLLMENT_TOKEN:-}
+      POUNDLOCK_NODE_DATA_DIR: /var/lib/poundlock
+    volumes:
+      - ./tests/e2e/node.toml:/etc/poundlock/node.toml:ro
+      - ./tests/e2e/systemd-inhibit:/usr/local/bin/systemd-inhibit:ro
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,size=16m,uid=10001,gid=10001
+      - /var/lib/poundlock:rw,nosuid,size=16m,uid=10001,gid=10001,mode=0700
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    depends_on:
+      controller:
+        condition: service_healthy

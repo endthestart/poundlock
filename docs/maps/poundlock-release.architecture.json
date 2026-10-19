@@ -1,0 +1,208 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Poundlock: local models, durable work",
+    "locale": "en",
+    "quality_profile": "showcase",
+    "animation": "trace",
+    "viewBox": [
+      1200,
+      710
+    ]
+  },
+  "components": [
+    {
+      "id": "requester",
+      "type": "frontend",
+      "label": "Your editor or agent",
+      "sublabel": "Browser \u00b7 API \u00b7 CLI",
+      "pos": [
+        40,
+        275
+      ],
+      "size": [
+        190,
+        80
+      ]
+    },
+    {
+      "id": "control",
+      "type": "backend",
+      "label": "Poundlock controller",
+      "sublabel": "Readiness \u00b7 jobs \u00b7 results",
+      "pos": [
+        355,
+        275
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "supervision",
+      "type": "security",
+      "label": "Trusted supervisor",
+      "sublabel": "Docker authority \u00b7 capacity",
+      "pos": [
+        685,
+        275
+      ],
+      "size": [
+        205,
+        80
+      ]
+    },
+    {
+      "id": "coding-worker",
+      "type": "backend",
+      "label": "Agent containers",
+      "sublabel": "Pinned Pi \u00b7 tools \u00b7 source",
+      "pos": [
+        1010,
+        275
+      ],
+      "size": [
+        185,
+        80
+      ]
+    },
+    {
+      "id": "durable-state",
+      "type": "database",
+      "label": "Persistent state",
+      "sublabel": "SQLite \u00b7 keys \u00b7 job history",
+      "pos": [
+        355,
+        65
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "model-server",
+      "type": "external",
+      "label": "Your model servers",
+      "sublabel": "OpenAI-compatible APIs",
+      "pos": [
+        40,
+        525
+      ],
+      "size": [
+        190,
+        80
+      ]
+    },
+    {
+      "id": "machine-node",
+      "type": "backend",
+      "label": "Machine node",
+      "sublabel": "Inventory \u00b7 runtime adapters",
+      "pos": [
+        355,
+        525
+      ],
+      "size": [
+        200,
+        80
+      ]
+    },
+    {
+      "id": "verification",
+      "type": "security",
+      "label": "Verification container",
+      "sublabel": "Fresh copy \u00b7 protected files",
+      "pos": [
+        1010,
+        525
+      ],
+      "size": [
+        185,
+        80
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "request-work",
+      "from": "requester",
+      "to": "control",
+      "label": "Prompt + source",
+      "variant": "emphasis"
+    },
+    {
+      "id": "save-work",
+      "from": "control",
+      "to": "durable-state",
+      "label": "Persist"
+    },
+    {
+      "id": "claim-work",
+      "from": "control",
+      "to": "supervision",
+      "label": "Job contract",
+      "variant": "emphasis"
+    },
+    {
+      "id": "create-worker",
+      "from": "supervision",
+      "to": "coding-worker",
+      "label": "Create / remove",
+      "variant": "security"
+    },
+    {
+      "id": "verify-patch",
+      "from": "coding-worker",
+      "to": "verification",
+      "label": "Candidate patch",
+      "variant": "emphasis",
+      "labelDy": 80
+    },
+    {
+      "id": "runtime-control",
+      "from": "control",
+      "to": "machine-node",
+      "label": "Runtime lease",
+      "labelDy": 80
+    },
+    {
+      "id": "manage-model",
+      "from": "machine-node",
+      "to": "model-server",
+      "label": "Load / unload",
+      "labelDy": 40
+    },
+    {
+      "id": "relay-inference",
+      "from": "control",
+      "to": "model-server",
+      "label": "Inference"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "emerald",
+      "title": "Work survives disconnection",
+      "items": [
+        "The supervisor claims jobs and reports patches, checks and cleanup."
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Restricted execution",
+      "items": [
+        "Workers receive scoped inference access; only the supervisor controls Docker."
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Machines stay useful",
+      "items": [
+        "Wake on demand where supported; release owned models after work."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,75 @@
+name: poundlock
+
+services:
+  controller:
+    image: ${POUNDLOCK_IMAGE:?Set POUNDLOCK_IMAGE from the release environment file}
+    command: ["controller"]
+    restart: unless-stopped
+    environment:
+      POUNDLOCK_BIND: 0.0.0.0:7331
+      POUNDLOCK_DATA_DIR: /data
+      POUNDLOCK_RUNTIME_DIR: /run/poundlock
+      POUNDLOCK_ALLOW_JOB_NETWORK: ${POUNDLOCK_ALLOW_JOB_NETWORK:-false}
+      POUNDLOCK_EXTERNAL_TIMEOUT_SECONDS: ${POUNDLOCK_EXTERNAL_TIMEOUT_SECONDS:-600}
+      POUNDLOCK_JOB_INFERENCE_TIMEOUT_SECONDS: ${POUNDLOCK_JOB_INFERENCE_TIMEOUT_SECONDS:-1200}
+      POUNDLOCK_MAX_ACTIVE_JOBS_PER_TOKEN: ${POUNDLOCK_MAX_ACTIVE_JOBS_PER_TOKEN:-10}
+      POUNDLOCK_MAX_REQUESTS_IN_FLIGHT: ${POUNDLOCK_MAX_REQUESTS_IN_FLIGHT:-512}
+      POUNDLOCK_OPENROUTER_CATALOG: ${POUNDLOCK_OPENROUTER_CATALOG:-on-request}
+      RUST_LOG: ${POUNDLOCK_LOG:-poundlock=info,tower_http=info}
+    ports:
+      - "${POUNDLOCK_LISTEN_ADDRESS:-127.0.0.1}:${POUNDLOCK_PORT:-7331}:7331"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - controller-state:/data
+      - runtime-secrets:/run/poundlock
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=64m
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 128
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:7331/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 5s
+
+  runner:
+    image: ${POUNDLOCK_IMAGE:?Set POUNDLOCK_IMAGE from the release environment file}
+    command: ["runner"]
+    restart: unless-stopped
+    user: "${POUNDLOCK_UID:-10001}:${POUNDLOCK_GID:-10001}"
+    group_add: ["${POUNDLOCK_DOCKER_GID:?Set POUNDLOCK_DOCKER_GID to the Docker socket group; see README.md}"]
+    environment:
+      POUNDLOCK_CONTROLLER_URL: http://controller:7331
+      POUNDLOCK_RUNNER_TOKEN_FILE: /run/poundlock/runner-token
+      POUNDLOCK_PROJECTS_DIR: /projects
+      POUNDLOCK_WORK_DIR: /work
+      POUNDLOCK_RESULT_DIR: /results
+      POUNDLOCK_JOB_WALL_SECONDS: ${POUNDLOCK_JOB_WALL_SECONDS:-3600}
+      POUNDLOCK_RUNNER_CAPACITY: ${POUNDLOCK_RUNNER_CAPACITY:-1}
+      POUNDLOCK_RUNNER_MEMORY_BYTES: ${POUNDLOCK_RUNNER_MEMORY_BYTES:-}
+      POUNDLOCK_WORKER_RUNTIME: ${POUNDLOCK_WORKER_RUNTIME:-}
+      RUST_LOG: ${POUNDLOCK_LOG:-poundlock=info}
+    depends_on:
+      controller:
+        condition: service_healthy
+    volumes:
+      - runtime-secrets:/run/poundlock:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - runner-results:/results
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+      - /work:rw,noexec,nosuid,size=${POUNDLOCK_WORK_SIZE:-2g},uid=${POUNDLOCK_UID:-10001},gid=${POUNDLOCK_GID:-10001},mode=0700
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    stop_grace_period: 60s
+
+volumes:
+  controller-state:
+  runtime-secrets:
+  runner-results:

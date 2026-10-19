@@ -1,0 +1,238 @@
+name: CI
+# Pull requests, forks included, run every check here on disposable GitHub-hosted
+# runners with a read-only token and no secrets. Nothing here publishes anything.
+# release.yml runs this same workflow on a version tag and publishes only the
+# artifacts it built and tested.
+on:
+  push:
+    branches: ["**"] # a tag runs these checks through release.yml
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'workflow_call' }}
+jobs:
+  security:
+    # Fast scanners first. Every tool is pinned by version and, for images, by
+    # digest; sources are streamed into each container, so no workspace is mounted.
+    # A scanner, database or network failure fails the job; it is never read as clean.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0 # gitleaks scans the whole history
+      - name: Check exception dates
+        run: python3 scripts/check-exception-dates.py deny.toml
+      - name: Scan for secrets (gitleaks 8.30.1, working tree and history)
+        run: |
+          set -euo pipefail
+          # --redact keeps any finding out of the log; the log shows file, line and commit only.
+          tar cf - . | docker run --rm -i --cpus 1 --memory 1g --memory-swap 1g --pids-limit 128 \
+            --network none --read-only --tmpfs /scan:rw,nosuid,size=2g \
+            -e GIT_CONFIG_COUNT=1 -e GIT_CONFIG_KEY_0=safe.directory -e GIT_CONFIG_VALUE_0='*' \
+            --entrypoint sh ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f -c '
+              tar xf - -C /scan
+              cd /scan
+              status=0
+              gitleaks dir --no-banner --redact -v --exit-code 1 . || status=1
+              gitleaks git --no-banner --redact -v --exit-code 1 . || status=1
+              exit $status'
+      - name: Check crates (cargo-deny 0.20.2, advisories, bans, licences, sources)
+        run: |
+          set -euo pipefail
+          # cargo-deny ships no container image; the release binary is verified against a pinned SHA-256.
+          git archive --format=tar HEAD | docker run --rm -i --cpus 2 --memory 4g --memory-swap 4g --pids-limit 256 \
+            --read-only --tmpfs /work:rw,nosuid,size=2g --tmpfs /tmp:rw,nosuid,exec,size=512m --tmpfs /cargo:rw,nosuid,size=2g \
+            -e CARGO_HOME=/cargo --workdir /work \
+            --entrypoint sh rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e -c '
+              set -eu
+              tar xf -
+              curl -fsSL -o /tmp/cargo-deny.tgz https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
+              echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  /tmp/cargo-deny.tgz" | sha256sum -c -
+              tar xzf /tmp/cargo-deny.tgz -C /tmp
+              /tmp/cargo-deny-0.20.2-x86_64-unknown-linux-musl/cargo-deny --locked check --hide-inclusion-graph -s'
+      - name: Scan lockfiles (osv-scanner 2.7.0)
+        run: |
+          set -euo pipefail
+          tar cf - Cargo.lock pi-runtime/package-lock.json | docker run --rm -i --cpus 1 --memory 1g --memory-swap 1g --pids-limit 128 \
+            --read-only --tmpfs /scan:rw,nosuid,size=64m --workdir /scan \
+            --entrypoint sh ghcr.io/google/osv-scanner:v2.7.0@sha256:4f3b7e2c64b9d38a5febc5a7e4a3dfef1d1362f726dea7a2ef4762b46469fcd0 -c '
+              tar xf - -C /scan
+              /osv-scanner scan source --lockfile Cargo.lock --lockfile pi-runtime/package-lock.json'
+      - name: Static analysis (Semgrep 1.180.0, own offline rules)
+        run: |
+          set -euo pipefail
+          # No registry rules and no network: the rules live in .semgrep/ and have tests.
+          # report.yml prints findings without failing; block.yml fails the build.
+          tar cf - --exclude=.git . | docker run --rm -i --cpus 2 --memory 2g --memory-swap 2g --pids-limit 256 \
+            --network none --read-only --tmpfs /scan:rw,nosuid,size=1g --tmpfs /tmp:rw,nosuid,size=256m -e HOME=/tmp \
+            --entrypoint sh semgrep/semgrep:1.180.0@sha256:529ee8a277ec8adc5b534d7c74eea0a47e9de21d62852b6ba7ac6ba9566845c3 -c '
+              set -eu
+              tar xf - -C /scan
+              cd /scan
+              (cd .semgrep && semgrep --metrics=off --disable-version-check --test .)
+              echo "Reported rules (Semgrep labels every finding Blocking; this step does not fail on them)"
+              semgrep scan --metrics=off --disable-version-check --config .semgrep/report.yml --exclude .semgrep --quiet . || true
+              echo "Blocking rules"
+              semgrep scan --metrics=off --disable-version-check --config .semgrep/block.yml --exclude .semgrep --error --quiet .'
+  binaries:
+    # Native builds only. Each platform formats, lints, tests and builds on its own
+    # runner; nothing is cross-linked against another platform's SDK.
+    needs: security
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux-x86_64
+          - runner: ubuntu-24.04-arm
+            platform: linux-aarch64
+          - runner: macos-15
+            platform: macos-aarch64
+          - runner: macos-15-intel
+            platform: macos-x86_64
+    name: binary ${{ matrix.platform }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Build and test the Linux binary on Debian 12
+        if: runner.os == 'Linux'
+        run: |
+          docker run --rm -v "$PWD:/source" -w /source rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e bash -c '
+            set -euo pipefail
+            apt-get update && apt-get install -y --no-install-recommends python3
+            rustup component add rustfmt clippy
+            bash scripts/build-binary.sh'
+      - name: Build and test the macOS binary
+        if: runner.os == 'macOS'
+        run: |
+          rustup toolchain install 1.98 --profile minimal --component rustfmt,clippy
+          rustup override set 1.98
+          bash scripts/build-binary.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.platform }}
+          path: dist/${{ matrix.platform }}/
+          if-no-files-found: error
+          retention-days: 30
+  validate:
+    needs: binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: node-artifacts
+          pattern: "*-*64"
+      - name: Restore binary modes
+        run: chmod 755 node-artifacts/*/poundlock
+      - name: Check source assets and the capability converter
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/tools
+          /tmp/tools/bin/python -m pip install --quiet --require-hashes -r scripts/requirements-ci.txt
+          PATH="/tmp/tools/bin:$PATH" bash scripts/check-source.sh
+      - name: Validate browser workflows
+        env:
+          POUNDLOCK_TEST_CONTROLLER: node-artifacts/linux-x86_64/poundlock
+        run: |
+          set -euo pipefail
+          TEST_DEPS=$(mktemp -d)
+          npm install --prefix "$TEST_DEPS" --ignore-scripts playwright@1.62.1
+          "$TEST_DEPS/node_modules/.bin/playwright" install --with-deps chromium
+          NODE_PATH="$TEST_DEPS/node_modules" python3 scripts/test-browser.py
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+      - name: Build candidate image
+        # Public builds embed no update key and sign nothing (docs/node-update-signing.md).
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          # No build record, printed or uploaded: its provenance carries GitHub's event
+          # payload, which includes the pusher's account email.
+          DOCKER_BUILD_SUMMARY: "false"
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+          BUILDX_METADATA_PROVENANCE: "disabled"
+        with:
+          context: .
+          load: true
+          pull: true
+          tags: poundlock:candidate
+          platforms: linux/amd64
+          provenance: false
+      - name: Scan image (Trivy 0.75.0, High and Critical with a fix fail)
+        run: |
+          set -euo pipefail
+          # Exceptions live in .trivyignore: one "CVE-... exp:YYYY-MM-DD" per line, reason above it.
+          LIST='{{ range . }}{{ range .Vulnerabilities }}{{ .VulnerabilityID }} {{ .Severity }} {{ .Status }} {{ .PkgName }} {{ .InstalledVersion }} {{ .PkgPath }}{{ "\n" }}{{ end }}{{ end }}'
+          docker save poundlock:candidate | docker run --rm -i --cpus 2 --memory 4g --memory-swap 4g \
+            -v poundlock-trivy:/scan -e TRIVY_CACHE_DIR=/scan/cache -e LIST="$LIST" \
+            -e IGNORE_B64="$(base64 -w0 < .trivyignore)" \
+            --entrypoint sh ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa -c '
+              set -eu
+              trap "rm -f /scan/image.tar" EXIT
+              cat > /scan/image.tar
+              printf %s "$IGNORE_B64" | base64 -d > /scan/ignorefile
+              echo "High and Critical without a fix (reported, not blocking)"
+              trivy image --input /scan/image.tar --scanners vuln --severity HIGH,CRITICAL --ignore-status fixed --ignorefile /scan/ignorefile --no-progress --exit-code 0 --format template --template "$LIST"
+              echo "High and Critical with a fix (blocking)"
+              trivy image --input /scan/image.tar --scanners vuln --severity HIGH,CRITICAL --ignore-unfixed --ignorefile /scan/ignorefile --no-progress --exit-code 1'
+      - name: Audit the image's Pi runtime (npm audit gate)
+        run: |
+          set -euo pipefail
+          NPM_AUDIT=$(mktemp)
+          # npm exits non-zero whenever it finds anything; the gate decides, and
+          # allows only unexpired exceptions listed in security/npm-audit-allow.json.
+          docker run --rm --cpus 2 --memory 2g --memory-swap 2g --env npm_config_cache=/tmp/npm --entrypoint sh poundlock:candidate -c 'cd /opt/poundlock/pi && npm audit --omit=dev --json' > "$NPM_AUDIT" || true
+          python3 scripts/npm-audit-gate.py "$NPM_AUDIT" security/npm-audit-allow.json
+      - name: Validate worker isolation, verification and recovery
+        run: bash scripts/test-image.sh poundlock:candidate
+      - name: Rehearse installation and backup restoration
+        run: python3 scripts/test-install.py poundlock:candidate
+      - name: Check notices inside the image and the native archives
+        run: python3 scripts/check-notices.py --image poundlock:candidate --archives node-artifacts
+      - name: Software bills of materials (Trivy 0.75.0, CycloneDX)
+        run: |
+          set -euo pipefail
+          mkdir -p sbom
+          docker save poundlock:candidate | docker run --rm -i --cpus 2 --memory 4g --memory-swap 4g \
+            --network none -v poundlock-sbom:/scan \
+            --entrypoint sh ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa -c '
+              set -eu
+              trap "rm -f /scan/image.tar /scan/sbom.json" EXIT
+              cat > /scan/image.tar
+              trivy image --quiet --offline-scan --skip-db-update --input /scan/image.tar --format cyclonedx --output /scan/sbom.json >&2
+              cat /scan/sbom.json' > sbom/poundlock-image.cdx.json
+          git archive --format=tar HEAD Cargo.lock | docker run --rm -i --cpus 1 --memory 1g --memory-swap 1g \
+            --network none --tmpfs /scan:rw,nosuid,size=256m --workdir /scan \
+            --entrypoint sh ghcr.io/aquasecurity/trivy:0.75.0@sha256:af6acf9a6b85dfe389a1941505c0ce9efef52a4719635e1a962f022a3d855daa -c '
+              set -eu
+              tar xf - -C /scan
+              trivy fs --quiet --offline-scan --skip-db-update --format cyclonedx --output /scan/sbom.json /scan/Cargo.lock >&2
+              cat /scan/sbom.json' > sbom/poundlock-native.cdx.json
+          python3 -c 'import json,sys; [json.load(open(p))["components"] for p in sys.argv[1:]]' sbom/*.cdx.json
+      - name: Save tested image
+        run: docker save poundlock:candidate | gzip > poundlock-candidate.tar.gz
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: poundlock-candidate-image
+          path: poundlock-candidate.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: poundlock-sbom
+          path: sbom/
+          if-no-files-found: error
+          retention-days: 90

@@ -1,0 +1,8 @@
+{
+  "name": "poundlock-pi-runtime",
+  "private": true,
+  "description": "The Pi coding harness bundled in the Poundlock image, installed with npm ci from the lockfile beside this file.",
+  "dependencies": {
+    "@earendil-works/pi-coding-agent": "1.1.0"
+  }
+}

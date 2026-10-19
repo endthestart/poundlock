@@ -1,0 +1,99 @@
+name: Release
+# A version tag runs the whole CI workflow and the full end-to-end suite on the
+# tagged commit. Publishing then waits for approval in the `release` environment
+# (configure it with a required reviewer): nothing is pushed to the registry,
+# attested or attached to a release until a maintainer approves that run. Only
+# the image and binaries CI built and tested are published; nothing is rebuilt.
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+jobs:
+  checks:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+  end-to-end:
+    needs: checks
+    uses: ./.github/workflows/e2e.yml
+    with:
+      full: true
+      image-artifact: poundlock-candidate-image
+    permissions:
+      contents: read
+  publish:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [checks, end-to-end]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    environment:
+      name: release
+    permissions:
+      contents: write # the draft GitHub release
+      packages: write # the GHCR image
+      id-token: write # attestations
+      attestations: write
+      artifact-metadata: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Confirm the tag matches the packaged version
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: python3 scripts/package-release.py --version "$VERSION"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: artifacts
+      - name: Restore the tested image and binaries
+        run: |
+          set -euo pipefail
+          mkdir -p node-artifacts
+          mv artifacts/linux-x86_64 artifacts/linux-aarch64 artifacts/macos-aarch64 artifacts/macos-x86_64 node-artifacts/
+          chmod 755 node-artifacts/*/poundlock
+          gzip -dc artifacts/poundlock-candidate-image/poundlock-candidate.tar.gz | docker load
+          docker image inspect poundlock:candidate >/dev/null
+      - name: Resolve release image
+        id: image
+        env:
+          REPOSITORY: ${{ github.repository }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          echo "name=ghcr.io/${REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+          echo "tag=ghcr.io/${REPOSITORY,,}:$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Authenticate registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish the tested image and package installers
+        id: release
+        env:
+          IMAGE: ${{ steps.image.outputs.tag }}
+          VERSION: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          docker tag poundlock:candidate "$IMAGE"
+          docker push "$IMAGE"
+          PIN=$(docker image inspect "$IMAGE" --format '{{index .RepoDigests 0}}')
+          echo "digest=${PIN##*@}" >> "$GITHUB_OUTPUT"
+          python3 scripts/package-release.py --image "$PIN" --version "$VERSION"
+          cp artifacts/poundlock-sbom/*.cdx.json dist/release/
+          (cd dist/release && sha256sum -- *.tar.gz *.cdx.json > SHA256SUMS)
+      - name: Attest release archives
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: dist/release/*.tar.gz
+      - name: Attest image
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-name: ${{ steps.image.outputs.name }}
+          subject-digest: ${{ steps.release.outputs.digest }}
+          push-to-registry: true
+      - name: Create a draft release for review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.ref_name }}
+        run: gh release create "$VERSION" dist/release/* --verify-tag --draft --title "Poundlock $VERSION" --notes "Download the Compose bundle to install the server. Native archives include the CLI, node, notices and dependency licenses. Verify SHA256SUMS before installing. The CycloneDX files list the image's and the native binaries' components."

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "agents": {
+    "providers": {
+      "poundlock": {
+        "extends": "pi",
+        "label": "poundlock",
+        "description": "Pi through poundlock /v1. Do not commit a real token.",
+        "env": {
+          "OPENAI_BASE_URL": "http://127.0.0.1:7331/v1",
+          "OPENAI_API_KEY": "replace-from-token-file"
+        },
+        "models": [
+          {
+            "id": "coding",
+            "label": "Local coding",
+            "isDefault": true
+          }
+        ]
+      }
+    }
+  }
+}

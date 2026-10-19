@@ -1,0 +1,14 @@
+# Containerised node for the end-to-end suite. The controller is another
+# container on a private Compose network, so plain HTTP is accepted here only.
+network = { mode = "system" }
+allow_insecure_http = true
+auto_update = false
+heartbeat_seconds = 2
+lease_timeout_seconds = 180
+
+# A fixture runtime: each lifecycle step leaves a marker the suite reads back.
+[runtimes.fixture]
+ensure = ["/usr/bin/touch", "/tmp/ensured-{model}"]
+renew = []
+release = ["/usr/bin/touch", "/tmp/released-{lease_id}"]
+stop = ["/usr/bin/touch", "/tmp/stopped-{lease_id}"]

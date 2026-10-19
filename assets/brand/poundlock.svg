@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">Poundlock</title>
+  <desc id="desc">Private inference routes converging through a controlled gate.</desc>
+  <rect x="24" y="24" width="464" height="464" rx="112" fill="#1d1f27"/>
+  <g fill="none" stroke="#01a982" stroke-width="28" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M92 152h78c39 0 70 31 70 70v2"/>
+    <path d="M92 256h116"/>
+    <path d="M92 360h78c39 0 70-31 70-70v-2"/>
+    <path d="M304 256h116"/>
+  </g>
+  <rect x="208" y="208" width="96" height="96" rx="30" fill="#05cc93"/>
+  <circle cx="256" cy="248" r="14" fill="#1d1f27"/>
+  <path d="M248 258h16l7 25h-30z" fill="#1d1f27"/>
+</svg>
+

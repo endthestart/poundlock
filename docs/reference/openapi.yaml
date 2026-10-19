@@ -1,0 +1,548 @@
+openapi: 3.1.0
+info:
+  title: Poundlock application API
+  version: 0.3.0
+  x-poundlock-api-major: 1
+  x-poundlock-contract-revision: 5
+  description: >-
+    Contract revision 5 (API major 1) of the authenticated client contract for
+    model discovery, inference, managed external access, usage, and durable
+    jobs. `GET /api/v1/capabilities` reports the revision a running controller
+    implements; clients must compare it rather than infer compatibility from
+    the product version. Operator and node administration routes are
+    intentionally outside this document. Any route except `/healthz` may answer
+    503 with code `controller_busy` and `Retry-After: 1` when the controller is
+    at its limit of requests in flight.
+servers:
+  - url: /
+security:
+  - applicationToken: []
+paths:
+  /healthz:
+    get:
+      summary: Controller process liveness
+      security: []
+      responses:
+        "200": { description: The controller process is serving requests }
+  /readyz:
+    get:
+      summary: Controller/storage readiness
+      description: >-
+        Reports only that the controller is serving and its SQLite store
+        answers. It does not establish runner, node, model endpoint, credential
+        or capacity readiness; use access preflight and job options for those.
+      security: []
+      responses:
+        "200":
+          description: Controller storage is ready
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, scope, checks, version]
+                properties:
+                  status: { const: ready }
+                  scope: { const: controller_storage }
+                  checks:
+                    type: object
+                    properties:
+                      storage: { const: ok }
+                  version: { type: string }
+        "503":
+          description: Controller storage is unavailable
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+  /api/v1/capabilities:
+    get:
+      summary: Read the supported contract revision and optional features
+      responses:
+        "200":
+          description: Capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Capabilities"
+  /v1/models:
+    get:
+      summary: List deliberately published model profiles
+      responses:
+        "200":
+          description: OpenAI-compatible model list with Poundlock metadata
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, data, poundlock]
+                properties:
+                  object: { const: list }
+                  poundlock:
+                    type: object
+                    required: [schema_version, contract_revision]
+                    properties:
+                      schema_version: { type: integer }
+                      contract_revision: { type: integer }
+                  data:
+                    type: array
+                    items: { $ref: "#/components/schemas/ModelProfile" }
+  /v1/capacity:
+    get:
+      summary: Who holds each exclusive model slot, and who waits for it
+      description: >-
+        Revision 5. Each slot that is held or has a line: the kind of holder
+        and the waiters in the order the slot goes to them, by class and
+        time waited. No prompts, tokens or sessions. Requires `models:read`.
+      responses:
+        "200":
+          description: The lines
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [object, max_wait_seconds, default_wait_seconds, slots]
+                properties:
+                  object: { const: capacity }
+                  max_wait_seconds: { type: integer }
+                  default_wait_seconds: { type: integer }
+                  held_stream_seconds:
+                    type: integer
+                    description: >-
+                      How long a streamed request without `Poundlock-Wait` or a
+                      ticket waits on its open stream.
+                  slots:
+                    type: array
+                    items:
+                      type: object
+                      required: [slot, models, holder_kind, waiting]
+                      properties:
+                        slot: { type: string }
+                        models: { type: array, items: { type: string } }
+                        holder_kind: { type: [string, "null"], enum: [interactive, job, null] }
+                        waiting:
+                          type: array
+                          items:
+                            type: object
+                            required: [class, kind, waited_seconds]
+                            properties:
+                              class: { enum: [owner, planner, worker, background] }
+                              kind: { enum: [request, job] }
+                              waited_seconds: { type: integer }
+  /v1/chat/completions:
+    post:
+      summary: Relay an OpenAI-compatible chat completion through a profile
+      description: >-
+        A profile served by llama.cpp carries a `reasoning_effort` to the
+        server as `chat_template_kwargs` (`enable_thinking`, `reasoning_effort`),
+        because llama.cpp ignores the top-level field. That profile also accepts
+        `thinking_budget_tokens`, a whole number from 1 to its
+        `poundlock.max_output_tokens`, and says so with
+        `poundlock.reasoning.thinking_budget_tokens` (`max`, `default`) on
+        `/v1/models`. Other profiles omit that key and refuse the field.
+      parameters:
+        - { $ref: "#/components/parameters/Wait" }
+        - { $ref: "#/components/parameters/Priority" }
+        - { $ref: "#/components/parameters/Session" }
+        - { $ref: "#/components/parameters/QueueTicket" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: OpenAI-compatible completion or stream
+          headers:
+            x-poundlock-request-id: { $ref: "#/components/headers/RequestId" }
+            x-poundlock-served-model: { $ref: "#/components/headers/ServedModel" }
+            x-poundlock-response-cost: { $ref: "#/components/headers/ResponseCost" }
+        "400": { $ref: "#/components/responses/UnsupportedReasoningEffort" }
+        "403": { $ref: "#/components/responses/ExternalPermissionRequired" }
+        "404": { $ref: "#/components/responses/UnknownModel" }
+        "409": { $ref: "#/components/responses/CapacityInUse" }
+        "429": { $ref: "#/components/responses/CapacityQueueFull" }
+        "502": { $ref: "#/components/responses/UpstreamFailure" }
+        "503": { $ref: "#/components/responses/RuntimeUnavailable" }
+        "504": { $ref: "#/components/responses/UpstreamFailure" }
+  /v1/completions:
+    post:
+      summary: Relay an OpenAI-compatible completion through a profile
+      parameters:
+        - { $ref: "#/components/parameters/Wait" }
+        - { $ref: "#/components/parameters/Priority" }
+        - { $ref: "#/components/parameters/Session" }
+        - { $ref: "#/components/parameters/QueueTicket" }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200":
+          description: OpenAI-compatible completion or stream
+          headers:
+            x-poundlock-request-id: { $ref: "#/components/headers/RequestId" }
+            x-poundlock-served-model: { $ref: "#/components/headers/ServedModel" }
+            x-poundlock-response-cost: { $ref: "#/components/headers/ResponseCost" }
+        "400": { $ref: "#/components/responses/UnsupportedReasoningEffort" }
+        "403": { $ref: "#/components/responses/ExternalPermissionRequired" }
+        "404": { $ref: "#/components/responses/UnknownModel" }
+        "409": { $ref: "#/components/responses/CapacityInUse" }
+        "429": { $ref: "#/components/responses/CapacityQueueFull" }
+        "502": { $ref: "#/components/responses/UpstreamFailure" }
+        "503": { $ref: "#/components/responses/RuntimeUnavailable" }
+        "504": { $ref: "#/components/responses/UpstreamFailure" }
+  /api/v1/access/preflight:
+    post:
+      summary: Prepare and report application-scoped access without inference
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model]
+              properties:
+                model: { type: string, description: Profile name or UUID }
+                operation:
+                  type: string
+                  enum: [inference, job]
+                  default: inference
+                  description: Selects the ordinary permission checked before access is prepared
+      responses:
+        "200":
+          description: >-
+            Current admission state. Credential and policy reasons take
+            precedence; when those pass, inference preflight also reports node
+            runtime state. Only a real block changes `availability`
+            (`blocked` with a `runtime_*` reason); an on-demand wake and an
+            occupied exclusive slot are additive (`runtime_state`, `capacity`).
+            Job preflight reports `runner_status` and never slot occupancy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AccessState" }
+  /api/v1/usage:
+    get:
+      summary: Read this application token's managed LiteLLM usage
+      responses:
+        "200":
+          description: Application-scoped policy and fresh usage, or explicit unavailability
+  /api/v1/job-options:
+    get:
+      summary: List durable profiles, harnesses, and submission limits
+      responses:
+        "200": { description: Durable job options }
+  /api/v1/jobs:
+    get:
+      summary: List shared durable jobs
+      responses:
+        "200": { description: Jobs }
+    post:
+      summary: Submit a replay-safe durable job
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        "200": { description: Submitted or idempotently replayed job }
+        "403": { $ref: "#/components/responses/ExternalPermissionRequired" }
+        "409": { description: Idempotency key was reused for different input }
+        "429": { $ref: "#/components/responses/TooManyActiveJobs" }
+components:
+  parameters:
+    Wait:
+      name: Poundlock-Wait
+      in: header
+      description: >-
+        Revision 5. Seconds to hold the request while its model's exclusive
+        slot is busy, at most 110 (under a typical reverse proxy's two-minute timeout). Nothing is
+        sent before the slot is the request's. Without it the operator's
+        default applies (`default_wait_seconds` on `/v1/capacity`, 110 unless
+        the operator sets it; zero answers at once, as before revision 5). A
+        streamed request (`"stream": true`) without it or a ticket is not told
+        "busy": it gets its 200 and event stream at once and waits on it, an SSE
+        comment (`: waiting for MODEL, position N`) every 15 seconds, for up to
+        `held_stream_seconds` (600). Its turn streams as usual; an error after
+        the status was sent arrives as one `data:` event holding the usual
+        `{"error": …}` body.
+      schema: { type: integer, minimum: 0, maximum: 110 }
+    Priority:
+      name: Poundlock-Priority
+      in: header
+      description: >-
+        Revision 5. The request's class in line: `owner` (a person waits on
+        it), `planner`, `worker` (the default) or `background`. `owner` and
+        `planner` need the token's `inference:priority` permission; without it
+        they count as `worker`. A request without this header waits as `owner`
+        when its token has that permission (an application a person waits on,
+        such as a chat app), otherwise as `worker`. A waiter rises one class per minute waited,
+        and durable jobs wait as `background`. There is no preemption: a
+        request in flight finishes first.
+      schema: { enum: [owner, planner, worker, background] }
+    Session:
+      name: Poundlock-Session
+      in: header
+      description: >-
+        Revision 5. The client's conversation, at most 128 characters. For 10
+        seconds after a session's request ends, its next request goes ahead of
+        others of the same class, so the runtime's prompt cache stays warm.
+      schema: { type: string, maxLength: 128 }
+    QueueTicket:
+      name: Poundlock-Queue-Ticket
+      in: header
+      description: >-
+        Revision 5. The `queue.ticket` of an earlier 409 from the same token:
+        sent within 60 seconds, the request takes back its place in line.
+      schema: { type: string, maxLength: 64 }
+  headers:
+    RequestId:
+      description: Correlates this response with controller diagnostics and gateway attribution
+      schema: { type: string, format: uuid }
+    ServedModel:
+      description: >-
+        What answered behind the stable profile name, when the operator's
+        route catalog records it (the body's `model` is the route name).
+        Revision 4.
+      schema: { type: string }
+    ResponseCost:
+      description: >-
+        The gateway's own cost estimate for this call in US dollars, when it
+        reports one, as a non-negative decimal (exponent notation allowed).
+        An estimate, not a bill. Revision 4.
+      schema: { type: string }
+  securitySchemes:
+    applicationToken:
+      type: http
+      scheme: bearer
+  schemas:
+    Capabilities:
+      type: object
+      required: [schema_version, api_major, contract_revision, product_version, features]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        api_major: { type: integer, const: 1 }
+        contract_revision: { type: integer, minimum: 1 }
+        product_version: { type: string }
+        features: { type: array, items: { type: string } }
+        verifier:
+          type: object
+          properties:
+            python: { type: string }
+            uv: { type: string }
+            writable_exec_paths:
+              type: array
+              items: { type: string }
+    AccessState:
+      type: object
+      required: [schema_version, profile_id, profile_name, availability, connection_mode]
+      properties:
+        schema_version: { type: integer, const: 1 }
+        profile_id: { type: string }
+        profile_name: { type: string }
+        operation: { enum: [inference, job] }
+        availability:
+          enum: [available, preparation_required, busy, blocked]
+        availability_reason:
+          type: [string, "null"]
+          description: >-
+            Known values include the blocked reasons plus
+            managed_identity_not_provisioned, runtime_wake_required and
+            capacity_in_use. Treat unrecognized values as unavailable.
+        blocked_reason:
+          type: [string, "null"]
+          description: >-
+            Credential/policy: inference_permission_required,
+            job_submission_permission_required, external_permission_required,
+            data_destination_confirmation_required, managed_budget_required,
+            managed_identity_provision_failed,
+            managed_identity_reconciliation_required,
+            managed_identity_unavailable. Runtime (inference only):
+            runtime_node_missing, runtime_node_unavailable,
+            runtime_node_network_unavailable, runtime_node_offline,
+            runtime_wake_unavailable.
+        warning_reason:
+          type: [string, "null"]
+          description: data_destination_unknown or, for job preflight, runner_not_connected
+        runtime_state:
+          enum: [preparation_required]
+          description: >-
+            Inference preflight only. The node will be woken or prepared by the
+            relay; the request is not blocked.
+        runtime_reason:
+          type: string
+          description: Reason for runtime_state, for example runtime_wake_required
+        capacity:
+          enum: [in_use]
+          description: >-
+            Inference preflight only. The exclusive slot is currently occupied;
+            the request may receive HTTP 409 capacity_in_use and should be
+            retried unchanged.
+        capacity_reason:
+          type: string
+          description: capacity_in_use
+        runner_status:
+          enum: [connected, not_seen]
+          description: >-
+            Job preflight only. Whether a runner contacted the controller
+            recently. Diagnostic, not an admission gate; queued jobs wait.
+        connection_mode:
+          enum: [direct, gateway_only, managed_applications]
+        data_destination:
+          enum: [operator_network, external, unknown]
+        usage: { type: [object, "null"], additionalProperties: true }
+    ModelProfile:
+      type: object
+      required: [id, object, owned_by, poundlock]
+      properties:
+        id: { type: string }
+        object: { const: model }
+        owned_by: { const: poundlock }
+        busy: { type: boolean }
+        availability:
+          enum: [available, preparation_required, busy, blocked]
+        availability_reason: { type: [string, "null"] }
+        blocked_reason: { type: [string, "null"] }
+        connection_mode:
+          enum: [direct, gateway_only, managed_applications]
+        poundlock:
+          type: object
+          additionalProperties: true
+          description: >-
+            Additive metadata. `capabilities` (contract feature
+            `capability_evidence`) is an array of measured evidence entries
+            pasted from the Toolkit; each carries `age_days`, `stale` and
+            `settings_match`, computed fresh on every read and never stored.
+            An empty array means unknown, not incapable.
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, code]
+          properties:
+            message: { type: string }
+            code: { type: string }
+            type: { type: string, description: poundlock_error for errors Poundlock itself returns }
+            param: { type: string, description: The request field the error is about, when there is one }
+            poundlock:
+              type: object
+              additionalProperties: true
+              description: Additive detail for some codes; see the response that uses it.
+    DidYouMean:
+      type: object
+      required: [name, profile_id, reason]
+      properties:
+        name: { type: string, description: The model name to send }
+        profile_id: { type: string }
+        reason:
+          type: string
+          description: >-
+            server_model_id when the request sent this profile's server model
+            ID (`poundlock.upstream_model`); similar_name for a match ignoring
+            case or as a suffix. Treat other values as similar_name.
+  responses:
+    UnknownModel:
+      description: >-
+        unknown_model_profile: `model` is not a profile UUID, name or alias.
+        The server model ID is never accepted in place of a name. The message
+        says which name to send, and `error.param` is `model`. When the token
+        also has models:read, `error.poundlock.did_you_mean` lists up to five
+        names: exact server model ID matches first, then names, aliases or
+        server model IDs that match ignoring case or as a suffix. Without
+        models:read it is absent and the message names nothing. The status
+        and code are stable; clients may probe permission with them.
+      content:
+        application/json:
+          schema:
+            allOf:
+              - $ref: "#/components/schemas/Error"
+              - type: object
+                properties:
+                  error:
+                    type: object
+                    properties:
+                      poundlock:
+                        type: object
+                        properties:
+                          did_you_mean:
+                            type: array
+                            maxItems: 5
+                            items: { $ref: "#/components/schemas/DidYouMean" }
+    ExternalPermissionRequired:
+      description: The application token lacks external:invoke
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    CapacityInUse:
+      description: >-
+        capacity_in_use: the exclusive node/runtime slot stayed in use for the
+        whole wait. Since revision 5 the body also carries `queue`: the
+        request's `position` (1 is next), the `holder_kind`, how many are
+        `waiting`, and, when the request waited, a `ticket` that keeps its
+        place for 60 seconds (`Retry-After: 1`). A request that did not wait
+        gets no ticket (`Retry-After: 15`).
+      content:
+        application/json:
+          schema:
+            allOf:
+              - { $ref: "#/components/schemas/Error" }
+              - type: object
+                properties:
+                  queue:
+                    type: object
+                    required: [position, holder_kind, waiting]
+                    properties:
+                      position: { type: integer, minimum: 1 }
+                      ticket: { type: string }
+                      holder_kind: { type: [string, "null"], enum: [interactive, job, null] }
+                      waiting: { type: integer }
+    CapacityQueueFull:
+      description: >-
+        capacity_queue_full (revision 5): 16 requests already wait for this
+        slot, or 4 from this token. Nothing waited; try again later.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    TooManyActiveJobs:
+      description: >-
+        too_many_active_jobs: the application token already has as many
+        unfinished jobs as the operator allows (`active_jobs_per_token` in job
+        options). Nothing was stored. Submit again after one of its jobs is
+        completed, failed or cancelled. Replaying an existing job's
+        idempotency key still returns that job.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UpstreamFailure:
+      description: >-
+        upstream_connection_failed (502) or upstream_timeout (504, no response
+        headers in time). After headers, a stream that stops making progress
+        for the idle timeout or fails upstream is terminated mid-body.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    UnsupportedReasoningEffort:
+      description: >-
+        unsupported_reasoning_effort: the request named a reasoning_effort (or
+        reasoning.effort) outside none, minimal, low, medium, high, xhigh, or
+        one this profile has verified levels for and this is not among them.
+        The message lists the supported values. Nothing is rewritten.
+        invalid_thinking_budget: `thinking_budget_tokens` was not a whole
+        number from 1 to the profile's output limit. Other invalid requests
+        use invalid_request.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RuntimeUnavailable:
+      description: >-
+        model_disabled when the profile was taken out of service after
+        repeated authoritative not-found answers from its upstream. Otherwise,
+        the model runtime could not be prepared. The code names the cause when
+        known (runtime_node_* or runtime_wake_* as in AccessState;
+        ensure_failed when the machine answered but could not prepare the
+        model, which a retry may clear), otherwise infrastructure_unavailable;
+        managed identity and endpoint problems use their own codes.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }

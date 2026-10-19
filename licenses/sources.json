@@ -1,0 +1,50 @@
+[
+  {
+    "package": "agent-client-protocol",
+    "version": "2.0.0",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "file": "agent-client-protocol-2.0.0-LICENSE",
+        "source": "https://raw.githubusercontent.com/agentclientprotocol/rust-sdk/ce023279824149008659dd8f4b8b70266a7e8210/LICENSE"
+      }
+    ]
+  },
+  {
+    "package": "agent-client-protocol-derive",
+    "version": "2.0.0",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "file": "agent-client-protocol-derive-2.0.0-LICENSE",
+        "source": "https://raw.githubusercontent.com/agentclientprotocol/rust-sdk/ce023279824149008659dd8f4b8b70266a7e8210/LICENSE"
+      }
+    ]
+  },
+  {
+    "package": "agent-client-protocol-schema",
+    "version": "1.5.0",
+    "license": "Apache-2.0",
+    "files": [
+      {
+        "file": "agent-client-protocol-schema-1.5.0-LICENSE",
+        "source": "https://raw.githubusercontent.com/agentclientprotocol/agent-client-protocol/d0549a115750a0a25c1c5631dd72e0d248859aa4/LICENSE"
+      }
+    ]
+  },
+  {
+    "package": "defmt-parser",
+    "version": "1.0.0",
+    "license": "MIT OR Apache-2.0",
+    "files": [
+      {
+        "file": "defmt-parser-1.0.0-LICENSE-MIT",
+        "source": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-MIT"
+      },
+      {
+        "file": "defmt-parser-1.0.0-LICENSE-APACHE",
+        "source": "https://raw.githubusercontent.com/knurling-rs/defmt/4a8cdb44891ed57b8ff5a023b6bec7137c48708f/LICENSE-APACHE"
+      }
+    ]
+  }
+]

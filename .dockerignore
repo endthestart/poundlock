@@ -1,0 +1,18 @@
+.git
+source
+target
+data
+projects
+*.sqlite3
+node-credential.json
+.env
+**/.env
+runner-results
+
+# Product builds never include local notes, output or editor state.
+dist
+private
+notes
+.changes
+.venv
+**/__pycache__

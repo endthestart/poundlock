@@ -1,0 +1,83 @@
+name: End-to-end
+# The documented Compose install on a disposable GitHub-hosted runner, with a
+# deterministic mock model server and, in full mode, llama.cpp serving a tiny
+# Apache-2.0 model. Pull requests run the mock suite; the nightly and release
+# runs add the real model. No secrets, no external model service.
+on:
+  pull_request:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      full:
+        description: Also run llama.cpp with the tiny model
+        type: boolean
+        default: true
+  workflow_call:
+    inputs:
+      full:
+        type: boolean
+        default: true
+      image-artifact:
+        description: Test this run's already-built image artifact instead of building one
+        type: string
+        default: ""
+permissions:
+  contents: read
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  stack:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 75
+    env:
+      FULL: ${{ github.event_name == 'schedule' || inputs.full == true }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Fetch the tested release candidate
+        if: inputs.image-artifact != ''
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: ${{ inputs.image-artifact }}
+          path: candidate
+      - name: Load the tested release candidate
+        if: inputs.image-artifact != ''
+        run: |
+          set -euo pipefail
+          gzip -dc candidate/*.tar.gz | docker load
+          docker tag poundlock:candidate poundlock:e2e
+      - uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+        if: inputs.image-artifact == ''
+      - name: Build the image under test
+        if: inputs.image-artifact == ''
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v7.3.0
+        env:
+          # No build record, printed or uploaded: its provenance carries GitHub's event
+          # payload, which includes the pusher's account email.
+          DOCKER_BUILD_SUMMARY: "false"
+          DOCKER_BUILD_RECORD_UPLOAD: "false"
+          BUILDX_METADATA_PROVENANCE: "disabled"
+        with:
+          context: .
+          load: true
+          pull: true
+          tags: poundlock:e2e
+          platforms: linux/amd64
+          provenance: false
+      - name: Run the end-to-end suite
+        run: |
+          set -euo pipefail
+          python3 -m venv /tmp/tools
+          /tmp/tools/bin/python -m pip install --quiet --require-hashes -r scripts/requirements-ci.txt
+          if [ "$FULL" = true ]; then FLAGS=--full; else FLAGS=; fi
+          /tmp/tools/bin/python tests/e2e/run.py poundlock:e2e $FLAGS --report e2e-report.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: e2e-report
+          path: e2e-report.json
+          if-no-files-found: warn
+          retention-days: 30

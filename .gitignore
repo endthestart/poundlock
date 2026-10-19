@@ -1,0 +1,42 @@
+# Rust / Cargo build output
+/target/
+**/*.rs.bk
+
+# Native debug and build leftovers (never commit these)
+/debug/
+/build/
+debug/
+build/
+
+# Local secrets and runtime state
+.env
+.env.*
+!.env.example
+/tests/uat/.env
+/data/
+*.sqlite3
+/node-credential.json
+/node.toml
+/config/local/
+/projects/*
+!/projects/.gitkeep
+
+# Local reference checkouts
+/source/
+
+# IDE / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*~
+
+# Python tooling if present on a mixed workstation
+.venv/
+__pycache__/
+*.py[cod]
+
+# Generated release artifacts
+/dist/
+/node-artifacts/*
+!/node-artifacts/.gitkeep

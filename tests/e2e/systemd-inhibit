@@ -1,0 +1,11 @@
+#!/bin/sh
+# Stand-in for the containerised test node only: a container has no logind and
+# nothing to keep awake. It drops systemd-inhibit's options (and the nested
+# systemd-inhibit the node uses) and runs the command the inhibitor would hold.
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --*|systemd-inhibit) shift ;;
+    *) break ;;
+  esac
+done
+exec "$@"

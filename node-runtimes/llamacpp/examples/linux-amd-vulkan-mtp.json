@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "runtime": {
+    "sweeper": "detached"
+  },
+  "profiles": {
+    "example-27b-mtp": {
+      "model": {
+        "family": "Example-27B",
+        "quantization": "IQ3_S",
+        "source": "example-org/Example-27B-MTP-GGUF",
+        "path": "/var/lib/poundlock/llamacpp/models/Example-27B-IQ3_S-mtp.gguf",
+        "size_bytes": 12120016960,
+        "sha256": "0000000000000000000000000000000000000000000000000000000000000000"
+      },
+      "server": {
+        "executable": "/opt/llama.cpp/llama-server",
+        "min_build": 11000,
+        "host": "0.0.0.0",
+        "port": 8080,
+        "context_tokens": 131072,
+        "api_key_file": "/etc/poundlock/llamacpp.key",
+        "slots_endpoint": false,
+        "environment": {
+          "GGML_VK_VISIBLE_DEVICES": "0"
+        },
+        "arguments": [
+          "--parallel",
+          "1",
+          "--n-gpu-layers",
+          "99",
+          "--flash-attn",
+          "on",
+          "--cache-type-k",
+          "q4_0",
+          "--cache-type-v",
+          "q4_0",
+          "--jinja",
+          "--chat-template-kwargs",
+          "{\"enable_thinking\":false}",
+          "--spec-type",
+          "draft-mtp",
+          "--spec-draft-n-max",
+          "4",
+          "--no-webui"
+        ]
+      },
+      "required_log_markers": [
+        "creating MTP draft context"
+      ],
+      "warmup": {
+        "min_tokens_per_second": 30,
+        "require_no_reasoning": true,
+        "request": {
+          "reasoning_effort": "none"
+        }
+      },
+      "conflicts": [
+        "ollama"
+      ],
+      "max_idle_vram_bytes": 3221225472,
+      "warm_seconds": 600,
+      "lease_timeout_seconds": 300,
+      "startup_timeout_seconds": 420
+    }
+  }
+}

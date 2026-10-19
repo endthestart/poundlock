@@ -1,0 +1,35 @@
+# Linux controller hosts: send LAN broadcasts from the host network.
+# docker compose -f compose.yaml -f compose.wake.yaml up -d
+services:
+  controller:
+    environment:
+      POUNDLOCK_WAKE_SOCKET: /run/poundlock-wake/wake.sock
+    volumes:
+      - wake-socket:/run/poundlock-wake:ro
+    depends_on:
+      wake-relay:
+        condition: service_healthy
+
+  wake-relay:
+    image: ${POUNDLOCK_IMAGE:?Set POUNDLOCK_IMAGE from the release environment file}
+    command: ["wake-relay"]
+    restart: unless-stopped
+    environment:
+      TOKIO_WORKER_THREADS: "2"
+    network_mode: host
+    user: "10001:10001"
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 16
+    mem_limit: 64m
+    volumes:
+      - wake-socket:/run/poundlock-wake
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--unix-socket", "/run/poundlock-wake/wake.sock", "http://localhost/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 6
+
+volumes:
+  wake-socket:

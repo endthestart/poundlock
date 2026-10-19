@@ -1,0 +1,6 @@
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+# Configure provider routes in LiteLLM itself. Poundlock does not create or
+# rewrite this list. The LiteLLM Admin UI can store routes in PostgreSQL.
+model_list: []
