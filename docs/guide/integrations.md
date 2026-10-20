@@ -36,7 +36,7 @@ a route only inside LiteLLM, revalidate and resave the Poundlock profile because
 Poundlock cannot detect that internal change.
 
 Call authenticated `GET /api/v1/capabilities` before relying on optional
-features. Contract revision 4 advertises `verifier_toolchain` (CPython series,
+features. Contract revision 5 adds `capacity_queue` (see "When a model is busy"). Revision 4 advertises `verifier_toolchain` (CPython series,
 uv, and writable exec paths on the worker/verifier image), `capability_evidence`
 (measured capability evidence on `/v1/models` and job-options rows; see below),
 `reasoning_levels`, `route_catalog` and `model_status` (ADR 0003),
@@ -51,6 +51,33 @@ profiles also include `busy` and `occupancy` (`kind` is `interactive`, `job`, or
 null, plus the machine and runtime slot) so a client can pick another profile
 instead of retrying a busy slot. Those fields do not include endpoint URLs, API
 keys, or operator overview data.
+
+### When a model is busy
+
+Profiles that share an exclusive slot run one request at a time. A request for a
+busy slot waits in line instead of failing (contract revision 5, feature
+`capacity_queue`):
+
+- `Poundlock-Wait: <seconds>` holds the request for up to 110 s. Without the
+  header it waits `POUNDLOCK_CAPACITY_DEFAULT_WAIT_SECONDS` (default 110; 0
+  answers at once).
+- `Poundlock-Priority` orders the line: `owner`, `planner`, `worker` or
+  `background`. `owner` and `planner` need the token's `inference:priority`
+  permission; a token with that permission that names no priority waits as
+  `owner`. A waiter rises one class a minute, and a `Poundlock-Session` that
+  just released the slot comes back first for 10 s, which keeps its prompt cache
+  warm.
+- A wait that runs out answers HTTP 409 `capacity_in_use` with `queue`
+  (`position`, 1 is next; `holder_kind`; `waiting`; and a `ticket`). Send the
+  same request again with `Poundlock-Queue-Ticket` within 60 s to keep its place.
+- A streamed request with neither `Poundlock-Wait` nor a ticket, such as one from
+  Open WebUI, gets its event stream at once and waits on it for up to 10 minutes,
+  with an SSE comment every 15 s, then streams its answer.
+- At most 16 requests wait per slot and 4 per token; beyond that the answer is
+  HTTP 429 `capacity_queue_full`.
+
+`GET /v1/capacity` (`models:read`) lists each held or waited-on slot: its model
+names, who holds it, and who waits, by class. Durable jobs wait in the same line.
 
 ### Inference destination and client compatibility
 
@@ -235,8 +262,8 @@ relay resolves by itself do not change `availability`, so existing clients keep
 working: a node that will be woken on demand adds `runtime_state:
 "preparation_required"` with `runtime_reason: "runtime_wake_required"`, and an
 occupied exclusive slot adds `capacity: "in_use"` with `capacity_reason:
-"capacity_in_use"` (the request itself may then receive HTTP 409; retry the
-same request). Job preflight never reports slot occupancy, because durable jobs
+"capacity_in_use"` (the request then waits in line; see "When a model is
+busy"). Job preflight never reports slot occupancy, because durable jobs
 queue. A job preflight adds `runner_status`
 (`connected` or `not_seen`) and warns `runner_not_connected` when no runner has
 contacted the controller recently; queued jobs still wait for one. Failed
@@ -257,8 +284,9 @@ Profiles without an exclusive slot have no managed busyness measurement.
 (`<node_id>/<runtime_profile>`), or is `null` when it has none. Profiles with
 the same `slot` run one at a time across all their names and aliases, and
 switching between two of them loads a different model. State can
-change after discovery: interactive admission can return HTTP 409
-`capacity_in_use`; durable jobs use the existing queue. Handle these outcomes
+change after discovery: an interactive request waits in line and can still end
+with HTTP 409 `capacity_in_use` when its wait runs out; durable jobs wait in the
+same line. Handle these outcomes
 without duplicate submissions or unauthorized fallback. Poll without spending
 model reasoning tokens. Job APIs require their jobs permissions independently
 of `models:read`; application tokens cannot access operator configuration.

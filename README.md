@@ -1,16 +1,24 @@
 # Poundlock
 
-**Put your private inference infrastructure to work.**
+**One OpenAI-compatible endpoint for the model servers on your own machines.**
 
-Status: 0.3.0, the first public release. A small project with one maintainer;
-see [support](#status-and-support).
+Status: 0.3.0, the first public release. The server runs on Linux x86_64 with
+Docker. A small project with one maintainer; see [support](#status-and-support).
 
-Poundlock connects the model servers you already run to your editor and to
-unattended coding jobs. Submit a prompt and source files, let a local agent work,
-then review its patch and independently checked results.
+Poundlock sits in front of the llama.cpp, Ollama or vLLM servers you already run.
+Each application, such as your editor, a chat app or a coding agent, gets its own
+token and permissions. When a model is busy, requests wait in line instead of
+failing; when its machine is asleep, Poundlock wakes it. It can also run unattended
+coding jobs and hand back a patch with independently checked results.
 
 - **One API for your models.** Connect OpenAI-compatible servers directly, or use
   an existing gateway such as LiteLLM.
+- **A token per application.** Each token gets only the permissions it needs:
+  list models, send inference requests, go ahead of other work, reach external
+  models, run jobs.
+- **Waits instead of failing.** A request for a busy model waits its turn, and a
+  chat app's stream is held open until the model is free.
+  [How it works](docs/guide/integrations.md#when-a-model-is-busy).
 - **Explicit external access.** Keep local inference separate from permission to
   send data or spend through external profiles, with optional LiteLLM budgets.
 - **Jobs that survive disconnection.** Follow progress in the browser or API,
@@ -31,6 +39,33 @@ servers.
 For the full Toolkit → Poundlock → Dispatch workflow, start with the
 [family getting-started guide](docs/guide/getting-started.md). What changed in each
 release, and how to upgrade, is in [CHANGELOG.md](CHANGELOG.md).
+
+## How it compares
+
+Poundlock is for a household or small team that owns its GPUs and wants one
+endpoint, per-application access and machines that sleep until needed. Other
+projects do parts of this better:
+
+| | Several machines, one endpoint | Token per application | Busy model waits | Wakes sleeping machines | Durable coding jobs | Paid API routing |
+|---|---|---|---|---|---|---|
+| **Poundlock** | yes | scoped permissions | queue, held streams | Wake-on-LAN | yes | External profiles, optional LiteLLM budgets |
+| [LiteLLM](https://github.com/BerriAI/litellm) | yes | virtual keys, budgets | priority scheduler | no | no | 100+ providers |
+| [llama-swap](https://github.com/mostlygeek/llama-swap) | no | API keys | no | no | no | no |
+| [Ollama](https://github.com/ollama/ollama) | no | no | queue (one machine) | no | no | Ollama cloud models |
+| [GPUStack](https://github.com/gpustack/gpustack) | yes, with placement | users, access control | not documented | not documented | not documented | yes |
+| [LocalAI](https://github.com/mudler/LocalAI) | distributed mode | API keys, quotas | not documented | no | no | no |
+
+- **LiteLLM** has far more providers and budgets; Poundlock uses it optionally for
+  external models rather than replacing it.
+- **Ollama, llama.cpp's server, LocalAI and llama-swap** speak the OpenAI API, so
+  each can be a model server behind Poundlock. It loads and unloads Ollama models
+  itself.
+- **GPUStack** is the closest overlap and schedules models across a cluster;
+  Poundlock does no placement, but wakes machines and runs coding jobs.
+- **Open WebUI** is a chat front end: point it at `http://<server>:7331/v1` with an
+  application token.
+
+Compared from each project's own documentation in October 2026; corrections welcome.
 
 ## Install
 
