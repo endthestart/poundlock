@@ -334,8 +334,12 @@ class ExampleTests(unittest.TestCase):
     def test_examples_and_package_have_no_personal_paths(self) -> None:
         root = Path(__file__).resolve().parents[1]
         forbidden = re.compile(r"/Users/[a-z]|/home/[a-z]", re.IGNORECASE)
-        files = [*EXAMPLES.glob("*"), *(root / "src").rglob("*.py"), *(root / "deploy").glob("*"),
-                 root / "README.md"]
+        files = [
+            *EXAMPLES.glob("*"),
+            *(root / "src").rglob("*.py"),
+            *(root / "deploy").glob("*"),
+            root / "README.md",
+        ]
         for path in files:
             if path.is_file():
                 with self.subTest(path.name):
