@@ -23,7 +23,8 @@ private operational records.
    destination, context and output limits, tool support, and fallback behavior.
    A fallback that can leave the operator network makes the destination
    `external`.
-2. In Poundlock **Connections**, add an endpoint with type **LiteLLM**, the gateway
+2. In Poundlock **Connections**, choose **Add a model server or gateway** with type
+   **Gateway (LiteLLM)**, the gateway
    API base (for example `https://gateway.example.net/v1`), its gateway credential
    and, when you open LiteLLM through a reverse proxy, its public address. Never route the gateway back to the same Poundlock profile.
 3. In **Models**, choose **Publish** on the route under Discover, or **Add model**
@@ -32,7 +33,7 @@ private operational records.
    verified. Each route declares where its prompts go: choose **To an external
    service** when a request or its fallback can leave the operator network.
 4. **Add model** publishes it. For managed application identities, run access
-   preflight and Generate through an application token; Poundlock does not use
+   preflight and Test inference through an application token; Poundlock does not use
    the administrative key for inference.
 5. Create a named application token in **Access**. The saved profile then appears
    in `GET /v1/models` with `endpoint_kind=litellm`, its declared destination,
@@ -128,19 +129,23 @@ change.
 
 ## Routing changes and client approvals
 
-### Add or update a model without losing the handoff
+### Add a model from the OpenRouter catalog
 
-In **Models → Discover**, choose a catalog model and **Add route in LiteLLM**.
-The guide keeps the upstream model ID and the gateway alias available to copy.
-Choose the gateway explicitly when there is more than one. To upgrade an alias
-clients already use, select its existing route rather than creating another one.
-The link opens LiteLLM's **Models + Endpoints** screen, or the selected model
-group. It never sends a provider credential in the URL and does not create a route.
+In **Models → Discover**, choose **Look up** under the OpenRouter catalog, find
+the model and choose **Add and publish…**. The card shows the upstream model and
+the catalog's prices, context and maximum output. Choose the gateway, the
+provider credential LiteLLM already holds (Poundlock lists names only), the route
+name applications ask for, the context and maximum output (within what the
+catalog lists), and where its prompts go.
 
-Save the route in LiteLLM with its existing provider credential, then return and
-choose **Check saved route**. That reads the selected gateway and requires both
-the alias and upstream model to match. A missing or mismatched route remains
-unpublished. A new route still needs **Publish** with an explicit destination.
+**Add and publish** creates the route in LiteLLM with the catalog's prices as its
+own cost per token, so LiteLLM counts its spend, and publishes the profile.
+Nothing is written before that. It needs a gateway in **Separate application
+identities and budgets** mode, refuses a route name the gateway already has, and
+never edits or deletes a route or writes a credential (ADR 0001).
+
+To point an alias clients already use at a newer model, choose **Edit route in
+LiteLLM** on that route, save it there, then refresh the profile as below.
 
 Discovery flags a published profile when the gateway now serves a different
 model. **Refresh profile from gateway** requires confirmation, updates its served
@@ -151,9 +156,7 @@ settings supported by the new model. Route checking and refreshing send no model
 requests; **Verify reasoning** does send small paid probes.
 
 For LiteLLM versions without the current `/ui/models-and-endpoints/` route, use
-its own navigation to reach Models. The guide's copied IDs and read-back check
-still apply. Dismiss the guide to abandon it; no rollback is needed because it
-never writes a gateway route or publishes a profile automatically.
+its own navigation to reach Models.
 
 Every saved profile advertises `poundlock.routing_revision`. Poundlock changes
 that value when the profile, endpoint, credential, destination, node, runtime,

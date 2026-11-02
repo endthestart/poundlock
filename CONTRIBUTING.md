@@ -12,7 +12,10 @@ contract first, then the consumers.
 
 ## Build and check
 
-Use Rust 1.98, Python 3.11 or newer with `jsonschema` (`pip install -r scripts/requirements-ci.txt`) and Node.js 22. From the repository root:
+Use Rust 1.98 (rustup reads it from `rust-toolchain.toml`), Python 3.10 or newer
+with the pinned check tools (`pip install -r scripts/requirements-ci.txt` in a
+virtual environment: jsonschema, ShellCheck, Ruff and mypy) and Node.js 22. From the
+repository root:
 
 ```sh
 bash scripts/build-binary.sh

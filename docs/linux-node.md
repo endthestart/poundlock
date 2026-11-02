@@ -43,13 +43,15 @@ help. Existing model servers can be connected directly.
    Use **Model server setup help** for relevant upstream installation links.
    When the server is running, choose **Connect a model server**. Add the model server
    endpoint in Connections and a model profile in Models, using this machine and runtime
-   `always-ready`. Use Generate to verify actual inference. A model listing or
+   `always-ready`. Use Test inference to verify actual inference. A model listing or
    an Online node is insufficient on its own.
 6. If the machine can sleep, configure its Wake-on-LAN adapter and test from
    real sleep. Do not probe with SSH during that test; SSH can wake some hosts.
 
 The installer creates `/etc/poundlock/node.toml`, a private
-`/var/lib/poundlock` directory, `poundlock-node.service`, and one polkit rule
+`/var/lib/poundlock` directory (the node's data folder: its binary, previous binary
+and state; `--data-dir` or `POUNDLOCK_NODE_DATA_DIR` sets another, and the
+installer passes it explicitly), `poundlock-node.service`, and one polkit rule
 allowing the selected login to inhibit sleep. It does not change routes, network
 interfaces, firewall rules, suspend settings, model files or model services.
 
@@ -69,10 +71,13 @@ The diagnostic does not advertise a heartbeat or execute runtime commands.
 
 - Missing executable or unknown configuration key: repair node.toml and run
   `/var/lib/poundlock/poundlock node-check --config /etc/poundlock/node.toml`.
-- Authentication failure: verify you are using the same controller. To enroll
-  again, stop the service while idle, preserve then remove the old credential
-  file as its owner, create a new token, and repeat install. Reusing the same
-  machine name rotates its credential. Never enroll over a machine doing work.
+- Authentication failure: verify `controller` in node.toml is the controller that
+  enrolled this machine. To enroll again, stop the service while idle, then move
+  the old credential file aside as its owner; the installer asks for a token only
+  when that file is missing. Create a new token for the same machine name and
+  repeat install. The controller refuses the name while Machines shows it Online
+  or Paused: wait for Offline, or remove it first. Reusing the name rotates its
+  credential. Never enroll over a machine doing work.
 - Connection failure: check the controller URL and the chosen interface. The
   node does not switch from One interface to another connection automatically.
 - Plain HTTP refused: a controller address on another machine must be
@@ -107,7 +112,7 @@ while maintenance is paused. The installer validates the staged binary, keeps
 Rollback uses the previous binary even if the new binary cannot start. Resume
 recovers an interrupted maintenance operation after its cause has been fixed.
 Neither operation changes the controller database or model files. Retain the
-installer alongside the binary for recovery. Re-check Generate after an upgrade.
+installer alongside the binary for recovery. Run Test inference again after an upgrade.
 
 Configurations without `auto_update` keep automatic idle updates; set
 `auto_update = false` to use explicit upgrades. A node built with the
@@ -160,7 +165,7 @@ without operator access, 409 for active work, 404 for an unknown machine).
 On a Linux machine that has never had this node installed:
 
 - Complete the installation using only Machines and this guide.
-- Confirm Online, the expected network connection, and Generate success.
+- Confirm Online, the expected network connection, and a Test inference answer.
 - Submit a small job in the UI and inspect its patch and verification evidence.
 - Restart the computer; confirm the service reconnects without a token prompt.
 - Test sleep, wake, inference, and cancellation if supported by the hardware.

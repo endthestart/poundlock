@@ -1,7 +1,8 @@
 [package]
 name = "poundlock"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2024"
+rust-version = "1.98"
 license = "Apache-2.0"
 description = "Self-hosted control plane for coding agents and private inference"
 
@@ -9,7 +10,7 @@ description = "Self-hosted control plane for coding agents and private inference
 agent-client-protocol = "=2.0.0"
 anyhow = "1"
 async-stream = "0.3"
-axum = { version = "0.8", features = ["macros"] }
+axum = "0.8"
 base64 = "0.22"
 bytes = "1"
 chacha20poly1305 = "0.10"
@@ -26,12 +27,11 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 semver = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-sha2 = "0.10"
+sha2 = "0.11"
 subtle = "2"
 tempfile = "3"
 thiserror = "2"
 tokio = { version = "1", features = ["full"] }
-tokio-util = { version = "0.7", features = ["compat"] }
 toml = "0.9"
 tower-http = { version = "0.6", features = ["catch-panic", "compression-gzip", "request-id", "timeout", "trace"] }
 tracing = "0.1"

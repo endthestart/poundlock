@@ -26,7 +26,7 @@ incompatibility when a required feature or revision is missing.
 
 | Release | Toolkit | Poundlock | Dispatch |
 |---|---|---|---|
-| Poundlock 0.3.0 | 0.5.0 (capability summary) | 0.3.0, API 1, contract revision 5 | 0.3.0 |
+| Poundlock 0.4.0 | 0.5.0 (capability summary) | 0.4.0, API 1, contract revision 5 | 0.3.1 |
 
 Each product's changelog records the combination its release was tested with.
 

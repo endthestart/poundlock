@@ -13,7 +13,8 @@ deployment when one is already operated by your organization.
 3. Run `docker compose up -d` and wait for both services to become healthy.
 4. Configure provider routes and organization limits in LiteLLM. Poundlock does
    not own those settings.
-5. In Poundlock Setup, add `http://HOST:4000/v1` as a LiteLLM endpoint. Choose
+5. In Poundlock **Connections**, add `http://HOST:4000/v1` as a model server of type
+   **Gateway (LiteLLM)**. Choose
    **Separate application identities and budgets**, enter the LiteLLM master key,
    set a maximum spend and reset period, and save. Poundlock validates model
    listing and key-management access.

@@ -56,7 +56,7 @@ the machine woke. See [wake setup and diagnosis](machines.md).
 
 For an existing runtime, choose the always-ready path. For supported managed
 Ollama loading, configure the node's Ollama adapter and select it in the profile.
-**Unload after idle seconds = 0** releases owned models after work; a longer
+**Keep loaded after the last request, in seconds = 0** releases owned models after work; a longer
 interval keeps them warm between requests. Poundlock does not take ownership of
 models another application already loaded. Custom runtime adapters are advanced
 node-local configuration; Toolkit measurements do not install them automatically.
@@ -68,7 +68,7 @@ deployment record; there is no report importer or automatic tier assignment.
 
 | Qualified setting | Poundlock configuration |
 |---|---|
-| Runtime API address and authentication | Connections: endpoint type, API base URL and upstream key |
+| Runtime API address and authentication | Connections: model server type, API base URL and upstream key |
 | Exact server model ID | **Server model ID** in Models, picked from what the server or machine reports; clients send the model name instead |
 | Tested context and output limits | Profile context window and maximum output tokens; match the runtime too |
 | Machine and runtime ownership | Enrolled node and its configured runtime profile, when managed |
@@ -78,7 +78,7 @@ deployment record; there is no report importer or automatic tier assignment.
 | Model/harness quality evidence | Capability evidence in Models, made with `scripts/toolkit-capabilities.py`; keep the result files in a private record |
 
 Pi coding needs at least 8192 context tokens. In **Models**, **Add model**
-publishes it; use **Generate** for an actual answer. Listing a server's model
+publishes it; use **Test inference** for an actual answer. Listing a server's model
 IDs and testing a connection publish nothing. Repeat a warm request if diagnosing
 cold-start latency; do not silently switch models after a failure.
 
@@ -138,4 +138,5 @@ Use [operations](operations.md) for backed-up upgrades, restoration and removal,
 and [machines](machines.md) for node upgrade/removal. Retain the tested image
 digest and previous state backup for rollback. Stop or finish active work before
 planned maintenance. Remove nodes and revoke their credentials when retiring them.
-Each application token sees only its own jobs, but that is not tenant isolation; see [security](../../SECURITY.md).
+Each application token sees only its own jobs, which is not tenant isolation; see
+[security](../../SECURITY.md).

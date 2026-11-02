@@ -1,5 +1,119 @@
 # Changelog
 
+## 0.4.0 (2 November 2026)
+
+Tested with Toolkit 0.5.0 and Dispatch 0.3.1.
+
+- The console and `docs/linux-node.md` now give the same recovery from a node's authentication
+  failure, the one that works: move the old credential aside, then enroll again. The console's old
+  steps left the node refused and could break a machine whose credential was fine.
+- The console, the node installer and one API error use today's names for models, application keys
+  and Test inference.
+- A console field that fails validation is marked `aria-invalid` until it is corrected, so a
+  screen reader says so too.
+- When a proxy answers with a non-JSON error, the console says it can't reach the controller and
+  gives the status, not "Invalid server response".
+- The Linux node guide is linked from the machine setup guide and included in the release bundle.
+- The controller image runs on Debian 13. Debian 12 left Critical findings in zlib and sqlite
+  that it will not fix. The builder stays on Debian 12, so the Linux node binary still needs only
+  glibc 2.36.
+- With the model drawer open, a console error shows inside it, above the footer: it covers no
+  field or button, and a keyboard can reach Dismiss.
+- Pi's minimatch is overridden to 11.0.1, which closes GHSA-g3hv-75wg-m249.
+- Verify reasoning no longer drops a level just because an adaptive model didn't think about
+  its short probe. A level the upstream accepted, below one that reasoned on the same route,
+  now counts as verified: the route carries the setting. Listing only the levels that reasoned
+  had made Poundlock refuse low and medium for every client of Claude Sonnet 5.5.
+- A main build is a dev prerelease, `0.4.0-dev.<commit time>` (`scripts/dev_version.py`),
+  so nodes, which install only a higher version, take every main deploy instead of
+  waiting for the next release. Tags and branch builds keep Cargo.toml's version,
+  which on main names the latest published release, 0.3.0.
+- A node action whose poll reply was cut, as by a proxy restart, goes out again on the
+  node's next poll instead of after 11 minutes. A lost release had kept a machine's
+  slot held for its lease's five minutes, refusing every new request for that model.
+  Nodes now log the actions that fail, and capabilities carry the caller's own
+  permissions (`caller_permissions`).
+- From the console re-check: agent output renders even with the runner's own notes in
+  it, the OpenRouter card's output default follows the context until one is typed, the
+  job model is a deliberate choice, Add and test warns before a load, refreshes keep
+  focus and scroll, the job detail has Close and a `#jobs/<id>` link, the header shows
+  the build commit, and macOS nodes report GPU memory in bytes.
+- Access can edit a token's name and permissions (`PATCH /api/v1/api-tokens/{id}`)
+  without replacing its secret or losing its jobs. The controller publishes each
+  permission's label in capabilities (`permission_labels`, `token_permissions`) and
+  the operator overview, and Access shows those labels instead of codes. Any active
+  application token may now read capabilities, whatever its permissions. An empty
+  permission list says to choose one.
+- A new token's secret shows even when the refresh after creating it fails, and
+  Cancel job asks first and reports a refused cancel.
+- The Add-model drawer no longer changes its server: listing a server's models uses
+  `GET /api/v1/endpoints/{id}/models`, which records no health check, and declaring an
+  undeclared server's destination goes with the model in one change
+  (`declare_server`), so a refused model leaves the server as it was.
+- Removing a gateway that model profiles still use is refused before its client
+  keys are revoked, not after.
+- The job list shows each finished job's check result, the job form offers only
+  models that can run jobs, and Access refreshes when opened. Poundlock's own check
+  token is marked Internal, with nothing to revoke.
+- The model checks are named for what they do, Check listing and Test inference, and
+  Test inference asks before it may wake a machine and replace its loaded model.
+- The console keeps its token for the browser tab unless Remember on this device is
+  ticked, drops a saved token that stops working with a message, and keeps error
+  messages up until they are clicked away.
+- Refreshes and polls no longer rebuild controls under the operator: an open dropdown
+  stays open, a running job's detail keeps what was expanded, and the OpenRouter card
+  keeps focus while typing. A catalog model with no listed context is left for the
+  operator to fill in rather than given 131072.
+- Less clutter at production scale: revoked tokens are hidden until asked for, job
+  titles drop Markdown heading marks and a full job list says it shows the newest
+  only (`jobs_limit` in the overview and job options), machines group system and
+  virtual network links, and In use names each profile once.
+- Fewer contradictions: a test older than a day reads as history, machines without
+  Ollama drop the Ollama memory panel, a server its runtime reports reads as running,
+  and Discover shows a published route's saved price as its model card does.
+- One name per concept: application and administrator tokens, application keys for
+  LiteLLM's per-application identities, servers and gateways, and the node version.
+  Secret fields, catalog badges and the Models view toggle are named for assistive
+  technology, and Latte's focus ring meets 3:1.
+- A job's agent output reads as what the agent said and did, with failed tool calls
+  marked; Pi's raw event stream is one click away.
+- A nightly database backup (`POUNDLOCK_BACKUP_DIR`, `POUNDLOCK_BACKUP_AT`): a
+  consistent `VACUUM INTO` copy taken while the controller runs, checked, gzipped
+  with a checksum, kept for 14 copies plus each month's first for six months, and
+  reported in `last-backup.json`. `master-key` is never copied. `poundlock backup
+  --to DIR` makes one copy by hand. In a Compose install, `compose.backup.yaml`
+  mounts the folder named by `POUNDLOCK_BACKUP_PATH` and turns it on.
+- `compose.yaml` now forwards `POUNDLOCK_GIT_HOSTS`,
+  `POUNDLOCK_CAPACITY_DEFAULT_WAIT_SECONDS` and `POUNDLOCK_NODE_OFFLINE_SECONDS`
+  from `.env`; before, setting them there had no effect.
+- `GET /api/v1/harness-profiles` is gone. Nothing called it; the harness list is
+  in `/api/v1/overview` and `/api/v1/job-options`.
+- The ACP agent names itself Poundlock, not the pre-release Smart Local AI.
+- `poundlock node` no longer takes `--enrollment-token`. Enroll with
+  `node-enroll`, which reads the token from standard input; a container can still
+  set `POUNDLOCK_ENROLLMENT_TOKEN` for its first start.
+- A job's model requests check `reasoning_effort` as the relay does: `xhigh` is
+  accepted, a profile with verified levels accepts only those, and a refusal has
+  the code `unsupported_reasoning_effort`.
+- The image build no longer signs node binaries from a build secret. Sign after
+  each deploy with `scripts/sign-node-updates.py`, as since 0.2.0.
+- A 0.1.x database is no longer upgraded: the 0.1.x schema changes and the
+  one-time secret re-seal are gone. Start 0.2.0 or 0.2.1 on such a database first.
+- The subcommands that drive a controller (`status`, `endpoint-add`, `model-add`,
+  `project-add`, `node-token`, `node-wol`, `node-config-example` and `job-*`)
+  share one HTTP client and say plainly what went wrong: an unreachable
+  controller, a refused token or the controller's own message. They take
+  `--token-file`. `node-config-example` prints the controller's example, not the
+  local binary's; `node-token` takes `--node-name` and the controller's default
+  validity; `endpoint-add` takes `--public-url` and `--data-destination`, and
+  reads its key from `POUNDLOCK_ENDPOINT_API_KEY`, no longer `OPENAI_API_KEY`.
+- `POST /api/v1/model-profiles` fills what a request leaves out (name, context,
+  output limit, uses, wake policy, thinking and label) from the draft check the
+  console shows, and `model-add` sends only what it is given, so the two cannot
+  disagree. A request with neither `uses` nor `workload_class` now gets agent jobs
+  and interactive requests instead of a 400. The console asks the draft check for
+  a newly chosen machine's wake policy rather than keeping its own copy of the rule.
+
 ## 0.3.0 (19 October 2026)
 
 The first public release. Tested with Toolkit 0.5.0 and Dispatch 0.3.0.
