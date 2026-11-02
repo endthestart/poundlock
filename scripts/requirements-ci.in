@@ -1,1 +1,4 @@
 jsonschema==4.26.0
+shellcheck-py==0.11.0.1
+ruff==0.16.10
+mypy==2.4.0

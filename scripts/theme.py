@@ -44,8 +44,14 @@ SURFACES = {
     "line-strong": "surface2",
 }
 
-# Text on the panel surface (s2).
+# Text on every surface it sits on: Latte's s1 is darker than its panel (s2), and
+# measured on s2 alone, faint text was 4.24:1 on s1 (UX audit, 30 Oct).
 TEXT = {"text": ("text", 4.5), "muted": ("subtext1", 4.5), "faint": ("subtext0", 4.5)}
+TEXT_SURFACES = ("s1", "s2")
+# A badge's own tint: its state colour at 12% over the surface (app.css .badge).
+BADGE_TINT = 0.12
+# Badges sit in lists and panels (s1, s2), never on a raised control (s3).
+BADGE_SURFACES = ("s1", "s2")
 
 # Hues with meaning. Each produces `--<role>` (an indicator: dots, ticks,
 # borders — 3:1 against s2) and `--<role>-text` (4.5:1 against s2).
@@ -99,13 +105,18 @@ def mix(a, b, weight):
     return rgb_to_hex(tuple(x + (y - x) * weight for x, y in zip(ra, rb)))
 
 
-def reach(value, toward, background, target):
-    """The palette colour, or the least mix toward `toward` that meets `target`."""
+def reach(value, toward, backgrounds, target):
+    """The palette colour, or the least mix toward `toward` that meets `target` on every background."""
     for step in range(0, 101):
         candidate = mix(value, toward, step / 100)
-        if contrast(candidate, background) >= target:
+        if all(contrast(candidate, background) >= target for background in backgrounds):
             return candidate, step
-    raise SystemExit(f"cannot reach {target}:1 from {value} on {background}")
+    raise SystemExit(f"cannot reach {target}:1 from {value} on {backgrounds}")
+
+
+def tinted(roles, indicator):
+    """The backgrounds a badge's text sits on: its tint over the surfaces badges sit on."""
+    return [mix(roles[surface], indicator, BADGE_TINT) for surface in BADGE_SURFACES]
 
 
 def build():
@@ -113,21 +124,25 @@ def build():
     theme = {"source": f"catppuccin/palette {palette['version']}", "flavours": {}}
     for flavour in FLAVOURS:
         colors = {name: entry["hex"] for name, entry in palette[flavour]["colors"].items()}
-        panel, text = colors["base"], colors["text"]
+        text = colors["text"]
         roles, derived = {}, {}
         for role, name in SURFACES.items():
             roles[role] = colors[name]
+        surfaces = [roles[surface] for surface in TEXT_SURFACES]
         for role, (name, target) in TEXT.items():
-            roles[role], step = reach(colors[name], text, panel, target)
+            roles[role], step = reach(colors[name], text, surfaces, target)
             if step:
                 derived[role] = f"{name} mixed {step}% toward text"
         for role, name in MEANINGS.items():
-            for suffix, target in (("", 3.0), ("-text", 4.5)):
-                roles[role + suffix], step = reach(colors[name], text, panel, target)
-                if step:
-                    derived[role + suffix] = f"{name} mixed {step}% toward text"
+            roles[role], step = reach(colors[name], text, surfaces, 3.0)
+            if step:
+                derived[role] = f"{name} mixed {step}% toward text"
+            backgrounds = surfaces + tinted(roles, roles[role])
+            roles[role + "-text"], step = reach(colors[name], text, backgrounds, 4.5)
+            if step:
+                derived[role + "-text"] = f"{name} mixed {step}% toward text"
         for index, name in enumerate(OWNERSHIP, 1):
-            roles[f"own-{index}"], step = reach(colors[name], text, panel, 3.0)
+            roles[f"own-{index}"], step = reach(colors[name], text, surfaces, 3.0)
             if step:
                 derived[f"own-{index}"] = f"{name} mixed {step}% toward text"
         # A filled accent (primary button): the hue itself on dark flavours; on
@@ -177,16 +192,19 @@ def check_rules(theme):
     problems = []
     for flavour, entry in theme["flavours"].items():
         roles = entry["roles"]
-        for surface in ("s2", "s3"):
-            if contrast(roles["text"], roles[surface]) < 4.5:
-                problems.append(f"{flavour}: text on {surface}")
-        for role in list(MEANINGS) + ["muted", "faint"]:
-            name = role if role in ("muted", "faint") else role + "-text"
-            if contrast(roles[name], roles["s2"]) < 4.5:
-                problems.append(f"{flavour}: {name} below 4.5:1 on s2")
+        if contrast(roles["text"], roles["s3"]) < 4.5:
+            problems.append(f"{flavour}: text below 4.5:1 on s3")
+        for surface in TEXT_SURFACES:
+            for name in ["text", "muted", "faint"] + [role + "-text" for role in MEANINGS]:
+                if contrast(roles[name], roles[surface]) < 4.5:
+                    problems.append(f"{flavour}: {name} below 4.5:1 on {surface}")
+            for role in MEANINGS:
+                if contrast(roles[role], roles[surface]) < 3.0:
+                    problems.append(f"{flavour}: {role} indicator below 3:1 on {surface}")
         for role in MEANINGS:
-            if contrast(roles[role], roles["s2"]) < 3.0:
-                problems.append(f"{flavour}: {role} indicator below 3:1 on s2")
+            for background in tinted(roles, roles[role]):
+                if contrast(roles[role + "-text"], background) < 4.5:
+                    problems.append(f"{flavour}: {role}-text below 4.5:1 on its badge tint")
         if contrast(roles["on-accent"], roles["accent-fill"]) < 4.5:
             problems.append(f"{flavour}: on-accent below 4.5:1 on accent-fill")
     if set(OWNERSHIP) & STATE_HUES or set(OWNERSHIP) & {"teal", "mauve"}:
