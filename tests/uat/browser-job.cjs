@@ -67,9 +67,17 @@ const assert=require('node:assert/strict');
     await page.keyboard.press('Enter');
     await page.locator('.result-summary').getByText('Checks passed',{exact:true}).waitFor();
     await page.locator('#job-list .badge.passed',{hasText:'Checks passed'}).first().waitFor();
+    // The open job is in the address: Close puts it away, and the link opens it again.
+    const link=page.url();assert.match(link,/#jobs\/[0-9a-f-]{36}$/);
+    await page.locator('#close-job').click();assert.equal(await page.locator('#job-detail').isVisible(),false);assert.match(page.url(),/#jobs$/);
+    await page.goto(link);await page.locator('.result-summary').getByText('Checks passed',{exact:true}).waitFor();
     assert.equal(await page.locator('pre').filter({hasText:'Protocol fixture output — no model was run.'}).isVisible(),false,'agent logs should start collapsed');
     await page.locator('#job-detail>details>summary').filter({hasText:/^Agent output$/}).click();
     await page.getByText('Protocol fixture output — no model was run.',{exact:true}).waitFor();
+    // Pi's event stream reads as what the agent said and did, its raw form one click away.
+    const stream=[{type:'message_end',message:{role:'assistant',content:[{type:'text',text:'Done.'},{type:'toolCall',name:'read',arguments:{path:'a.txt'}}]}},{type:'message_end',message:{role:'toolResult',toolName:'bash',isError:true,content:[{type:'text',text:'exit 1'}]}}].map(e=>JSON.stringify(e)).concat('[poundlock] omitted 3 streaming message_update event(s) from retained output','\n... output truncated ...','{"type":"message_end","mess').join('\n')+'\n--- stderr ---\nnpm warn deprecated';
+    const rendered=await page.evaluate(text=>{const box=document.createElement('div');box.innerHTML=agentOutput(text);return [...box.children].map(child=>child.tagName==='DETAILS'?'['+child.querySelector('summary').textContent+'] '+child.querySelector('pre').textContent:child.textContent)},stream);
+    assert.deepEqual(rendered,['Done.','→ read a.txt','bash failed: exit 1','omitted 3 streaming message_update event(s) from retained output','... output truncated ...','An event cut off where the output was trimmed.',"[The agent's error output] npm warn deprecated",'[Raw event stream] '+stream.split('\n--- stderr ---\n')[0]]);
     assert.equal(await page.evaluate(()=>window.patchExecuted||window.metadataExecuted),undefined,'result markup executed');
     assert.equal(await page.locator('#job-detail [onmouseover], #job-detail img').count(),0,'unescaped provenance markup');
     const pendingDownload=page.waitForEvent('download');await page.getByRole('button',{name:'Download patch',exact:true}).first().click();
@@ -97,7 +105,27 @@ const assert=require('node:assert/strict');
     const gitJob=await (await gitAccepted).json();
     assert.equal(submissions[2].source.kind,'git');
     assert.equal(submissions[2].source.revision,'a'.repeat(40));
-    await request('POST',`/api/v1/jobs/${gitJob.id}/cancel`,{},issued.token);
+    await page.locator('#job-detail code',{hasText:gitJob.id}).waitFor();
+    // The 2 s poll of a queued job keeps what the reader closed.
+    const timeline=page.locator('#job-detail>details',{has:page.locator(':scope>summary',{hasText:/^Timeline$/})});
+    assert.equal(await timeline.evaluate(item=>item.open),true);
+    await timeline.locator(':scope>summary').click();await page.waitForTimeout(2500);
+    assert.equal(await timeline.evaluate(item=>item.open),false);
+    const cancels=[];page.on('request',r=>{if(r.url().endsWith(`/api/v1/jobs/${gitJob.id}/cancel`))cancels.push(r)});
+    page.once('dialog',dialog=>dialog.dismiss());
+    await page.locator('#cancel-job').click();
+    await page.waitForTimeout(200);
+    assert.equal(cancels.length,0,'A declined confirm sends nothing');
+    await page.route(`**/api/v1/jobs/${gitJob.id}/cancel`,route=>route.fulfill({status:500,json:{error:{status:500,message:'cancel held'}}}));
+    page.once('dialog',dialog=>dialog.accept());
+    await page.locator('#cancel-job').click();
+    await page.waitForFunction(()=>document.querySelector('#toast').classList.contains('error')&&document.querySelector('#toast').textContent.includes('cancel held'));
+    assert.equal(await page.locator('#cancel-job').isEnabled(),true);
+    await page.unroute(`**/api/v1/jobs/${gitJob.id}/cancel`);
+    page.once('dialog',dialog=>dialog.accept());
+    await page.locator('#cancel-job').click();
+    await page.waitForFunction(()=>document.querySelector('#toast').textContent.includes('Cancellation requested'));
+    assert.equal((await request('GET',`/api/v1/jobs/${gitJob.id}`,undefined,issued.token)).cancel_requested,true);
     assert.deepEqual(errors,[]);
     console.log('PASS: jobs-only login, folder review/exclusions, immutable retry after lost response, one accepted job, runner source fetch, result after reload, verification controls, authenticated patch download, escaped patch markup, earlier attempts, responsive layout, pinned Git form and mutable-ref rejection');
   }finally{await browser.close()}

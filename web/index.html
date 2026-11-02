@@ -19,10 +19,10 @@
       <label class="visually-hidden" for="theme-menu">Theme</label>
       <select id="theme-menu" aria-label="Theme">
         <option value="system">System</option>
-        <option value="latte">Latte</option>
-        <option value="frappe">Frappé</option>
-        <option value="macchiato">Macchiato</option>
-        <option value="mocha">Mocha</option>
+        <option value="latte">Latte (light)</option>
+        <option value="frappe">Frappé (dark)</option>
+        <option value="macchiato">Macchiato (dark)</option>
+        <option value="mocha">Mocha (darkest)</option>
       </select>
     </div>
   </header>
@@ -31,10 +31,11 @@
     <section id="unlock" class="hero panel">
       <div>
         <h2>Connect to poundlock</h2>
-        <p>Use a jobs API token to submit and review work, or an admin token to manage this controller. Poundlock Dispatch needs an application token with jobs and inference permissions. Do not paste the administrator token into Dispatch.</p>
+        <p>Use an application token to submit and review jobs, or the administrator token to manage this controller. Poundlock Dispatch needs an application token with jobs and inference permissions. Do not paste the administrator token into Dispatch.</p>
       </div>
       <form id="token-form">
-        <label>Access token<input id="token" type="password" autocomplete="current-password" required></label>
+        <label>Application or administrator token<input id="token" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" data-1p-ignore data-lpignore="true" data-bwignore required></label>
+        <label class="check"><input id="remember-token" type="checkbox">Remember on this device</label>
         <button>Unlock</button>
       </form>
     </section>
@@ -61,7 +62,8 @@
         <button data-tab="access">Access</button>
       </nav>
 
-      <section id="jobs" class="tab active">
+      <section id="jobs" class="tab active" aria-labelledby="jobs-heading">
+        <h2 id="jobs-heading" class="sr-only">Jobs</h2>
         <div class="grid two">
           <form id="job-form" class="panel">
             <h3>Submit a job</h3>
@@ -89,13 +91,13 @@
             <p class="hint" id="job-toolchain">Independent-check toolchain is advertised after you connect.</p>
             <details id="job-checks"><summary>Checks and permissions (optional)</summary>
               <label>Verification commands<textarea id="job-commands" rows="3" placeholder="Example: python3 -m unittest discover -s tests"></textarea></label>
-              <p class="hint">One shell command per line, run in order against the proposed changes. Python 3 and Node.js are installed. Include dependency installation here if needed.</p>
+              <p class="hint">One shell command per line, run in order against the proposed changes, with the tools named above. Include dependency installation here if needed.</p>
               <label>Protected files or directories<textarea id="job-protected" rows="2" placeholder="Example: tests"></textarea></label>
               <p class="hint">One path per line, relative to the starting folder. Protected files must remain unchanged, including additions or deletions inside protected directories.</p>
               <div class="inline"><label>Repair attempts after failed checks<input id="job-repairs" type="number" min="0" max="3" value="0" required></label><label>Seconds per command<input id="job-check-timeout" type="number" min="1" max="600" value="300" required></label></div>
               <label>Command working directory<input id="job-check-cwd" placeholder="Starting folder (default)"></label>
-              <label class="check"><input id="job-network" type="checkbox">Allow outbound network access</label>
-              <p class="hint" id="job-network-hint">Allows the agent and verification commands to install dependencies and contact the internet and reachable local services.</p>
+              <label class="check"><input id="job-network" type="checkbox">Allow internet access</label>
+              <p class="hint" id="job-network-hint"></p>
             </details>
             <details><summary>Advanced</summary><label>Agent harness<select id="job-harness" required></select></label></details>
             <p class="hint">Review patches and verification results before applying changes. Job completion alone does not confirm correctness.</p>
@@ -106,6 +108,7 @@
             <div id="job-list" class="list empty">No jobs yet.</div>
           </div>
         </div>
+        <div id="job-detail" class="panel detail" role="region" aria-label="Job details" hidden></div>
         <details id="project-panel" class="panel">
           <summary>Server repositories <span class="optional">(optional)</span></summary>
           <div class="grid two">
@@ -120,14 +123,14 @@
             <div id="project-list" class="list empty">No server repositories configured.</div>
           </div>
         </details>
-        <div id="job-detail" class="panel detail" hidden></div>
       </section>
 
-      <section id="nodes" class="tab">
+      <section id="nodes" class="tab" aria-labelledby="nodes-heading">
+        <h2 id="nodes-heading" class="sr-only">Machines</h2>
         <details id="linux-guide" class="panel setup-guide">
           <summary>Linux installation guide</summary>
           <p>Install the node first. It reports the machine’s hardware and connections, and keeps it awake during work. You can set up a model server afterward.</p>
-          <h4>Before you start</h4>
+          <h3>Before you start</h3>
           <ul>
             <li>Linux with systemd and glibc 2.36 or newer, such as Debian 12, Ubuntu 24.04 or current CachyOS. Check with <code>systemctl --version</code> and <code>getconf GNU_LIBC_VERSION</code>.</li>
             <li>An Intel/AMD x86_64 or ARM64 processor. Check with <code>uname -m</code>.</li>
@@ -135,14 +138,14 @@
             <li>The machine must be able to reach the controller URL below. Drivers and models are needed for inference, but are not required to enroll.</li>
           </ul>
           <p id="node-reach-hint" class="hint"></p>
-          <h4>Install and connect</h4>
+          <h3>Install and connect</h3>
           <ol>
             <li>In Enroll a machine, enter a unique name, choose Linux and select the processor. Choose System routing, or One interface to restrict its connection to the controller.</li>
             <li>Download all three files into one folder on the Linux computer, such as <code>~/Downloads/poundlock</code>. If using this page on another computer, copy the files to Linux first. Any folder you own works.</li>
             <li>Create a token when ready to install. Open a terminal in that folder, run the displayed install command, and paste the token at the hidden prompt. Tokens expire after 15 minutes and can be used once.</li>
             <li>The installer checks the binary and configuration, places them in their permanent locations, and starts a systemd service under your login. Sudo installs the service; the node runs without root privileges. Keep the installer for later diagnostics, upgrades and removal.</li>
-            <li>Confirm Online in Machines and review Technical details. Use Model server setup help for installation links matched to the reported OS and GPU, or connect a server you already run. Save its endpoint on Connections, then add a model on Models using this machine. Choose <strong>Ollama — managed loading and unloading</strong> for Ollama, or <code>always-ready</code> for an externally managed server.</li>
-            <li>Use Test on Models to confirm inference, then submit a small job with a verification command. If the machine can sleep, configure Wake-on-LAN below and test from real sleep. Avoid SSH probes during the test; they can wake some machines.</li>
+            <li>Confirm Online in Machines and review Technical details. Use Model server setup help for installation links matched to the reported OS and GPU, or connect a server you already run. Add the server on Connections, then add a model on Models using this machine. Choose <strong>Ollama — managed loading and unloading</strong> for Ollama, or <code>always-ready</code> for an externally managed server.</li>
+            <li>Use Test inference on Models to confirm a model answers, then submit a small job with a verification command. If the machine can sleep, configure Wake-on-LAN below and test from real sleep. Avoid SSH probes during the test; they can wake some machines.</li>
           </ol>
           <details><summary>Installed files and advanced configuration</summary>
             <p>The installer creates <code>/etc/poundlock/node.toml</code>, a private <code>/var/lib/poundlock</code> directory, <code>poundlock-node.service</code>, and a polkit rule allowing the service login to inhibit sleep. You do not need to place downloads in system folders.</p>
@@ -160,7 +163,7 @@ journalctl -u poundlock-node.service --since '10 minutes ago'</pre>
               <li>Configuration error: correct node.toml and run <code>/var/lib/poundlock/poundlock node-check --config /etc/poundlock/node.toml</code>.</li>
               <li>Connection error: confirm the service is running and can reach the controller. One interface will stay offline if that interface disconnects.</li>
               <li>Plain HTTP refused: use an https:// controller address, or add <code>allow_insecure_http = true</code> to node.toml to accept plain HTTP on a network you trust.</li>
-              <li>Authentication error after a reinstall: remove the old registration in Machines, create a new token and enroll again. Finish or cancel active work first.</li>
+              <li>Authentication error: confirm <code>controller</code> in node.toml is the controller that enrolled this machine. To enroll again, finish or cancel active work, stop the service with <code>sudo systemctl stop poundlock-node.service</code>, and move the old credential aside with <code>sudo -u "$(cat /etc/poundlock/install-user)" mv /var/lib/poundlock/node-credential.json /var/lib/poundlock/node-credential.json.old</code>. Create a new token for the same machine name and repeat the install command. The name is refused while Machines shows it Online or Paused: wait for Offline, or remove it first.</li>
               <li>Sleep inhibition denied: check systemd-logind, polkit and <code>/etc/polkit-1/rules.d/60-poundlock-node.rules</code>. Run doctor under the service account; do not disable sleep system-wide.</li>
               <li>Interrupted install: correct the reported problem and repeat the command. An existing managed installation keeps its credential. The installer refuses unmanaged paths and symlinks.</li>
             </ul>
@@ -170,7 +173,7 @@ journalctl -u poundlock-node.service --since '10 minutes ago'</pre>
             <pre>sudo bash ./poundlock-node.sh upgrade --binary ./poundlock-linux-x86_64 --sha256 HASH
 sudo bash ./poundlock-node.sh rollback
 sudo bash ./poundlock-node.sh resume</pre>
-            <p>Upgrade pauses an idle node, validates the replacement and keeps the previous binary. Active work blocks maintenance. Rollback restores the previous binary; resume recovers an interrupted maintenance operation after its cause is fixed. Check Test on Models afterward.</p>
+            <p>Upgrade pauses an idle node, validates the replacement and keeps the previous binary. Active work blocks maintenance. Rollback restores the previous binary; resume recovers an interrupted maintenance operation after its cause is fixed. Use Test inference on Models afterward.</p>
             <p>Configurations without <code>auto_update</code> keep automatic idle updates; set <code>auto_update = false</code> in node.toml to choose explicit upgrades. A node that verifies signed updates installs only a newer binary signed with its release key; any other node refuses automatic updates unless the controller address is https:// or loopback.</p>
           </details>
           <details><summary>Remove or reinstall</summary>
@@ -181,7 +184,7 @@ sudo bash ./poundlock-node.sh resume</pre>
           </details>
           <details><summary>Check the complete installation</summary>
             <ul>
-              <li>Confirm Online, the selected connection, Test on Models and a small verified job.</li>
+              <li>Confirm Online, the selected connection, Test inference on Models and a small verified job.</li>
               <li>Reboot and confirm reconnection without another token prompt.</li>
               <li>Test sleep, wake, inference and cancellation when supported.</li>
               <li>Upgrade, roll back, remove and enroll again. Report any unclear step or unexplained failure.</li>
@@ -211,7 +214,7 @@ sudo bash ./poundlock-node.sh resume</pre>
           <form id="enroll-form" class="panel">
             <h3>Enroll a machine</h3>
             <h4>1. Choose this machine’s settings</h4>
-            <label>Machine name<input id="enroll-name" required maxlength="80" placeholder="workstation"></label>
+            <label>Machine name<input id="enroll-name" required maxlength="80" placeholder="For example, workstation"></label>
             <label>Operating system<select id="enroll-platform"><option value="linux">Linux</option><option value="macos">macOS</option></select></label>
             <label>Processor<select id="enroll-arch"><option value="x86_64">Intel / AMD (x86_64)</option><option value="aarch64">ARM64 / Apple silicon</option></select></label>
             <label>Node connection<select id="enroll-network"><option value="system">System routing</option><option value="interface">One interface</option></select></label>
@@ -234,22 +237,23 @@ sudo bash ./poundlock-node.sh resume</pre>
             <div id="enroll-issued" class="issued" data-reveal hidden>
               <strong>Copy this token now</strong>
               <p class="hint">It will not be shown again. If you lose it, create a new token.</p>
-              <div class="secret-row"><input id="enroll-secret" data-secret readonly><button id="copy-enroll-token" type="button" class="secondary">Copy token</button></div>
+              <div class="secret-row"><input id="enroll-secret" data-secret readonly aria-label="Enrollment token"><button id="copy-enroll-token" type="button" class="secondary">Copy token</button></div>
               <pre id="enroll-command"></pre>
               <button id="copied-enroll" type="button" class="secondary">Clear token</button>
             </div>
             <h4>4. Confirm the connection</h4>
-            <p class="hint">Look for Online in Machines. Then add the model server on Connections and a model on Models, and use Test to check inference. See the Linux installation guide above for details and recovery.</p>
+            <p class="hint">Look for Online in Machines. Then add the model server on Connections and a model on Models, and use Test inference to check it. On Linux, the Linux installation guide above covers details and recovery.</p>
           </form>
         </div>
 
       </section>
 
-      <section id="models" class="tab">
+      <section id="models" class="tab" aria-labelledby="models-heading">
+        <h2 id="models-heading" class="sr-only">Models</h2>
         <div class="models-toolbar">
-          <div class="segmented" role="tablist" aria-label="Models view">
-            <button type="button" class="seg-btn active" data-model-view="ready" role="tab" aria-selected="true">Ready</button>
-            <button type="button" class="seg-btn" data-model-view="discover" role="tab" aria-selected="false">Discover</button>
+          <div class="segmented" role="group" aria-label="Models view">
+            <button type="button" class="seg-btn active" data-model-view="ready" aria-pressed="true">Ready</button>
+            <button type="button" class="seg-btn" data-model-view="discover" aria-pressed="false">Discover</button>
           </div>
           <button id="add-model" type="button">Add model</button>
         </div>
@@ -257,7 +261,7 @@ sudo bash ./poundlock-node.sh resume</pre>
           <div id="ready-groups"></div>
         </div>
         <div id="models-discover" class="model-view">
-          <div id="route-handoff" class="panel" hidden></div>
+          <div id="route-add" class="panel" hidden></div>
           <div class="panel">
             <div class="discover-head"><h3>Routes on your gateways</h3><button id="discover-refresh" type="button" class="secondary">Refresh</button></div>
             <div id="discover-gateways" class="list empty">Open Discover to load your gateways’ routes.</div>
@@ -277,91 +281,86 @@ sudo bash ./poundlock-node.sh resume</pre>
         </div>
       </section>
 
-      <section id="connections" class="tab">
+      <section id="connections" class="tab" aria-labelledby="connections-heading">
+        <h2 id="connections-heading" class="sr-only">Connections</h2>
         <div class="grid two">
           <form id="endpoint-form" class="panel">
-            <h3>Inference endpoint</h3>
+            <h3 id="endpoint-heading">Add a model server or gateway</h3>
             <p class="hint">Choose Model server for a direct connection, or Gateway if you use LiteLLM.</p>
-            <label>Name<input id="endpoint-name" required placeholder="Home llama.cpp"></label>
+            <label>Name<input id="endpoint-name" required placeholder="For example, Home llama.cpp"></label>
             <label>Type<select id="endpoint-kind">
               <option value="openai">Model server</option>
               <option value="litellm">Gateway (LiteLLM)</option>
             </select></label>
             <label>Base URL<input id="endpoint-url" type="url" required placeholder="API URL ending in /v1"></label>
             <p class="hint">Copy the server’s network API address. A localhost address points to the controller itself. Use authentication when the server supports it.</p>
-            <label>Public address (optional)<input id="endpoint-public-url" type="url" placeholder="https://litellm.example.net"></label>
+            <label>Public address (optional)<input id="endpoint-public-url" type="url" placeholder="For example, https://models.example.net"></label>
             <p class="hint">Where you open this service in a browser, for example through your reverse proxy. Used for links such as the LiteLLM Admin UI; requests always use the base URL.</p>
             <fieldset id="endpoint-destination-group">
               <legend>Where does this server send prompts?</legend>
               <label class="check"><input type="radio" name="endpoint-destination" value="operator_network">Within my network</label>
               <label class="check"><input type="radio" name="endpoint-destination" value="external">To an external service</label>
-              <p id="endpoint-destination-hint" class="hint">Declared once for every model on this server. Poundlock never guesses it.</p>
+              <p class="hint">Declared once for every model on this server. Poundlock never guesses it.</p>
             </fieldset>
             <label>API key<input id="endpoint-key" type="password" placeholder="Optional for local servers"></label>
-            <label id="endpoint-clear-row" hidden><input id="endpoint-clear-key" type="checkbox"> Remove the saved API key</label>
-            <p id="endpoint-edit-note" class="hint" hidden>Leave the API key blank to keep the saved key. Moving the endpoint to another host, port or scheme requires entering the key again.</p>
+            <label id="endpoint-clear-row" class="check" hidden><input id="endpoint-clear-key" type="checkbox">Remove the saved API key</label>
+            <p id="endpoint-edit-note" class="hint" hidden>Leave the API key blank to keep the saved key. Moving the server to another host, port or scheme requires entering the key again.</p>
             <div id="endpoint-managed" hidden>
-              <label>Application access<select id="endpoint-connection-mode"><option value="gateway_only">Shared gateway key</option><option value="managed_applications">Separate application identities and budgets</option></select></label>
-              <p class="hint">Shared access uses the saved gateway key. Separate identities require LiteLLM with a database and an administrative key.</p>
+              <label>Application access<select id="endpoint-connection-mode"><option value="gateway_only">Shared gateway key</option><option value="managed_applications">A key and budget per application</option></select></label>
+              <p class="hint">Shared access uses the saved gateway key. Separate keys require LiteLLM with a database and an administrative key.</p>
               <div id="endpoint-managed-policy" hidden>
                 <div class="inline"><label>Maximum spend<input id="endpoint-managed-budget" type="number" min="0.01" step="0.01" placeholder="Required for external models"></label><label>Budget period<select id="endpoint-managed-budget-duration"><option value="">Select a reset period</option><option value="1d">Daily</option><option value="7d">Weekly</option><option value="30d">Monthly</option></select></label></div>
-                <p class="hint">This limit is copied independently to every application identity. External profiles stay blocked until both values are set.</p>
-                <details><summary>Advanced identity limits</summary>
+                <p class="hint">Each application key gets its own copy of this limit. External models stay blocked until both values are set.</p>
+                <details><summary>Advanced key limits</summary>
                   <div class="inline"><label>Key lifetime<input id="endpoint-managed-duration" placeholder="For example, 90d"></label><label>Requests per minute<input id="endpoint-managed-rpm" type="number" min="1" placeholder="Optional"></label></div>
                   <label>Tokens per minute<input id="endpoint-managed-tpm" type="number" min="1" placeholder="Optional"></label>
                 </details>
               </div>
             </div>
-            <button id="endpoint-save">Save endpoint</button> <button id="endpoint-cancel" type="button" class="secondary" hidden>Cancel edit</button>
+            <button id="endpoint-save">Save</button> <button id="endpoint-cancel" type="button" class="secondary" hidden>Cancel edit</button>
           </form>
           <div class="panel">
-            <h3>Configured endpoints</h3>
-            <div id="configured" class="list empty">No endpoints configured.</div>
+            <h3>Servers and gateways</h3>
+            <div id="configured" class="list empty">No servers or gateways yet.</div>
           </div>
         </div>
       </section>
 
-      <section id="access" class="tab">
+      <section id="access" class="tab" aria-labelledby="access-heading">
+        <h2 id="access-heading" class="sr-only">Access</h2>
         <div class="grid two">
           <form id="api-token-form" class="panel">
-            <h3>Create an API token</h3>
-            <p class="hint">Give each editor or integration its own token. A token sees and cancels only the jobs it submitted; all jobs share one queue and the same runners. The administrator token is for Models, Connections and Machines — do not paste it into Poundlock Dispatch.</p>
+            <h3 id="api-token-heading">Create an application token</h3>
+            <p class="hint">Give each editor or integration its own token. Each token sees and cancels only the jobs it submitted, so a replacement token starts with none of the old one's jobs; edit a token to keep them. The administrator token is for Models, Connections and Machines — do not paste it into Poundlock Dispatch.</p>
             <label>Name<input id="api-token-name" required maxlength="80" placeholder="Development laptop"></label>
-            <fieldset>
+            <fieldset id="api-token-permissions">
               <legend>Permissions</legend>
-              <label class="check"><input type="checkbox" name="api-permission" value="models:read" checked>List available models</label>
-              <label class="check"><input type="checkbox" name="api-permission" value="jobs:read">Read its own jobs and results</label>
-              <label class="check"><input type="checkbox" name="api-permission" value="jobs:submit">Submit jobs with supplied files</label>
-              <label class="check"><input type="checkbox" name="api-permission" value="jobs:cancel">Cancel its own jobs</label>
-              <label class="check"><input type="checkbox" name="api-permission" value="inference:invoke" checked>Send inference requests</label>
-              <label class="check"><input type="checkbox" name="api-permission" value="inference:priority">Go ahead of other work when a model is busy</label>
-              <p class="hint">For an application a person is waiting on, such as Dispatch's manager or a chat app like Open WebUI: a request that names no priority waits as yours. Without it, every request waits in line as ordinary work.</p>
-              <label class="check"><input type="checkbox" name="api-permission" value="external:invoke">Allow prompts and files to leave the controlled network</label>
-              <p class="hint">Required for profiles marked External. This may send private data and use paid services.</p>
             </fieldset>
-            <button>Create token</button>
+            <p id="api-token-edit-note" class="hint" hidden>Saving keeps the token's secret and jobs. A removed permission stops working on its next request.</p>
+            <button id="api-token-save">Create token</button> <button id="api-token-cancel" type="button" class="secondary" hidden>Cancel edit</button>
             <div id="api-token-issued" class="issued" data-reveal hidden>
               <strong>Copy this token now</strong>
               <p class="hint">It will not be shown again.</p>
-              <div class="secret-row"><input id="api-token-secret" data-secret readonly><button id="copy-api-token" type="button" class="secondary">Copy</button></div>
+              <div class="secret-row"><input data-secret readonly aria-label="New application token"><button id="copy-api-token" type="button" class="secondary">Copy</button></div>
               <button id="copied-api-token" type="button" class="secondary">I copied it</button>
             </div>
           </form>
           <div class="panel">
             <h3>Application tokens</h3>
             <div id="api-token-list" class="list empty">No application tokens.</div>
+            <button id="api-token-revoked" type="button" class="secondary" aria-controls="api-token-list" aria-expanded="false" hidden></button>
           </div>
           <div class="panel">
-            <h3>LiteLLM client identities</h3>
-            <p class="hint">Shown only for gateways where separate application identities are enabled. Failed and pending revocations are retried automatically.</p>
-            <div id="managed-identity-list" class="list empty">No managed identities.</div>
+            <h3>LiteLLM application keys</h3>
+            <p class="hint">Shown only for gateways that give each application its own key. Failed and pending revocations are retried automatically.</p>
+            <div id="managed-identity-list" class="list empty">No application keys.</div>
             <button id="reconcile-managed-identities" type="button" class="secondary">Retry pending revocations</button>
           </div>
         </div>
       </section>
     </div>
   </main>
-  <div id="toast" role="status" aria-live="polite"></div>
+  <div id="toast" role="status"></div>
 
   <div id="model-drawer-backdrop" class="drawer-backdrop" hidden></div>
     <aside id="model-drawer" class="drawer" role="dialog" aria-modal="true" aria-labelledby="model-drawer-title" hidden>
@@ -385,7 +384,7 @@ sudo bash ./poundlock-node.sh resume</pre>
             <legend>Servers that are always running</legend>
             <div id="source-servers" class="choices"></div>
           </fieldset>
-          <p class="hint">Another server? Add it on <a href="#connections" id="source-connect">Connections</a> first.</p>
+          <p class="hint">Another server? Add it on <a href="#connections">Connections</a> first.</p>
           <label id="source-endpoint-row" hidden><span id="source-endpoint-label">Poundlock reaches this machine's model server through</span><select id="source-endpoint"></select></label>
           <p id="source-endpoint-hint" class="hint" hidden></p>
         </section>
@@ -421,7 +420,7 @@ sudo bash ./poundlock-node.sh resume</pre>
             <label class="check"><input type="radio" name="model-wake" value="on-demand">Wake the machine and start the model</label>
             <p id="wake-hint" class="hint"></p>
           </fieldset>
-          <fieldset id="model-uses">
+          <fieldset>
             <legend>What is it for?</legend>
             <label class="check"><input type="radio" name="model-use" value="durable">Agent jobs</label>
             <label class="check"><input type="radio" name="model-use" value="interactive">Interactive requests</label>
@@ -470,10 +469,11 @@ sudo bash ./poundlock-node.sh resume</pre>
       </footer>
   </aside>
   <script src="/app.js"></script>
+  <script src="/access.js"></script>
   <script src="/jobs.js"></script>
   <script src="/connections.js"></script>
   <script src="/models.js"></script>
-  <script src="/gateway-handoff.js"></script>
+  <script src="/route-add.js"></script>
   <script src="/machines.js"></script>
 </body>
 </html>

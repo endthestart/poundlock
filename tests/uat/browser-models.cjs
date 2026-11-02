@@ -17,9 +17,9 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
   retirement:{disabled:{reason:'model not found upstream',source:'relay',since:'2026-09-20T10:00:00Z',evidence:[{at:'2026-09-20T10:00:00Z',status:404,source:'relay',detail:'not found'}]}},
   created_at:'2026-09-01T00:00:00Z',last_checked_at:'2026-09-20T10:00:00Z',last_check_ok:false,last_check_message:'model not found upstream'};
  const p3={id:'p3',name:'configured-route',endpoint_id:'gw',model_id:'configured-route',node_id:null,context_tokens:32768,max_output_tokens:8192,uses:['interactive'],workload_class:'interactive-coding',wake_policy:'never',data_destination:'operator_network',thinking:'model_default',aliases:[],capabilities:[],catalog:{provider:'openrouter',served_model:'openrouter/vendor/model-y',pricing:{input_per_mtok:1,output_per_mtok:3,source:'litellm_route',refreshed_at:'2026-09-23T00:00:00Z'},reasoning_levels:[]},retirement:{},created_at:'2026-09-23T00:00:00Z'};
- // A typical GPU node: llamacpp reports its models, Ollama reports none.
+ // Like Orion: llamacpp reports its models, Ollama reports none.
  const orion={id:'orion',name:'orion',platform:'linux',status:'online',capabilities:{runtimes:['ollama','llamacpp'],inventory:{runtimes:{llamacpp:{servable:['qwen3.8-27b-mtp'],models:[{id:'qwen3.8-27b-mtp',label:'Qwen3.8-27B IQ3_S',context_tokens:131072}]}}}}};
- const data={version:'0.1.0',nodes:[node,orion],endpoints:[endpointServer,endpointGateway],models:[p1,p2],projects:[],harnesses:[],jobs:[],api_tokens:[],occupancy:[],git_hosts:[]};
+ const data={version:'0.1.0',nodes:[node,orion],endpoints:[endpointServer,endpointGateway],models:[p1,p2],projects:[],harnesses:[],jobs:[],api_tokens:[],token_permissions:[],occupancy:[],git_hosts:[]};
  const discovery={gateways:[{endpoint_id:'gw',endpoint_name:'LiteLLM gateway',routes:[
    {name:'configured-route',upstream_model:'openrouter/vendor/model-y',provider:'openrouter',context_tokens:32768,supports_reasoning:true,stored_in:'config_file',pricing:{input_per_mtok:1,output_per_mtok:3,source:'litellm_route'},state:'configured_route',profile:null},
    {name:'published-route',upstream_model:'openrouter/vendor/model-x',provider:'openrouter',context_tokens:32768,supports_reasoning:true,stored_in:'config_file',pricing:null,state:'published',profile:{id:'p2',name:'Disabled model',status:'disabled'}},
@@ -28,13 +28,15 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
    {id:'vendor/model-y',name:'Model Y',created:0,context_tokens:32768,pricing:{input_per_mtok:1,output_per_mtok:3,source:'openrouter_catalog'},reasoning_efforts:['low','high'],default_effort:'medium',expires:null,state:'configured_route'},
    {id:'other/model-z',name:'Model Z',created:0,context_tokens:16384,pricing:{input_per_mtok:0.5,output_per_mtok:1.5,source:'openrouter_catalog'},reasoning_efforts:[],default_effort:null,expires:null,state:'catalog_listing'},
   ]}};
- let overviewPolls=0,discoveryHits=0,syncHits=0;const drafts=[];
+ let overviewPolls=0,discoveryHits=0,syncHits=0;const drafts=[],added=[];
  const browser=await chromium.launch({headless:true});try{
   const page=await browser.newPage({viewport:{width:1440,height:1100}}),errors=[];page.on('pageerror',e=>errors.push(e.message));
   await page.route('https://models-check.invalid/**',async route=>{
    const request=route.request(),url=new URL(request.url()),p=url.pathname;
    if(p==='/api/v1/overview'){overviewPolls++;return route.fulfill({json:data})}
    if(p==='/api/v1/model-profiles/p2/enable'&&request.method()==='POST'){data.models[1]={...data.models[1],retirement:{}};return route.fulfill({json:data.models[1]})}
+   if(p==='/api/v1/discovery/credentials'&&request.method()==='GET')return route.fulfill({json:{credentials:[{name:'anthropic',provider:'anthropic'},{name:'openrouter',provider:'openrouter'}]}});
+   if(p==='/api/v1/discovery/add-route'&&request.method()==='POST'){added.push(JSON.parse(request.postData()));return route.fulfill({json:{...p3,id:'p4',name:'model-z',model_id:'model-z'}})}
    if(p==='/api/v1/discovery'&&request.method()==='GET'){discoveryHits++;const asked=url.searchParams.get('catalog')==='openrouter';return route.fulfill({json:asked?discovery:{...discovery,catalog:{provider:'openrouter',mode:'on-request',requested:false,models:[]}}})}
    if(p==='/api/v1/model-profiles/p2/sync-route'&&request.method()==='POST'){
     syncHits++;data.models[1].catalog={...data.models[1].catalog,served_model:'openrouter/vendor/model-next',reasoning_levels:[],reasoning_verified_at:null};
@@ -49,7 +51,7 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
     data.models.push(p3);
     return route.fulfill({json:p3});
    }
-   if(p==='/api/v1/endpoints/server/test')return route.fulfill({json:{model_ids:['local-model','other-model']}});
+   if(p==='/api/v1/endpoints/server/models')return route.fulfill({json:{model_ids:['local-model','other-model']}});
    // The draft check's answer for these fixtures; the real rules have their own tests.
    if(p==='/api/v1/model-profiles/draft'){
     const b=request.postDataJSON(),gateway=b.endpoint_id==='gw',context=b.context_tokens??null;
@@ -73,11 +75,14 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
 
   await page.getByRole('button',{name:'Models',exact:true}).click();await page.locator('#models.active').waitFor();
   const readyText=await page.locator('#ready-groups').textContent();
-  // Both strings, each with a copy button: what clients send and the server's own ID.
-  assert.match(readyText,/Clients use\s*Local coding/);assert.match(readyText,/Server model ID\s*local-model/);
+  // A card names what clients send, with one copy button; the server's own ID is in the drawer.
+  assert.match(readyText,/Clients use\s*Local coding/);assert.doesNotMatch(readyText,/Server model ID/);
+  // A check on a machine's model may wake it and swap its loaded model, so it says so first.
+  assert.equal(await page.locator('[data-profile="p1"] [data-test-model]').textContent(),'Check listing');
+  assert.equal(await page.locator('[data-profile="p1"] [data-test-model]').getAttribute('data-loads'),'Linux workstation');
   await page.context().grantPermissions(['clipboard-read','clipboard-write'],{origin:'https://models-check.invalid'});
-  await page.locator('[data-profile="p1"] [data-copy="local-model"]').click();
-  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'local-model');
+  await page.locator('[data-profile="p1"] [data-copy="Local coding"]').click();
+  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'Local coding');
   // A machine's model shows "When a request arrives"; the stored value maps to its choice.
   await page.locator('[data-edit-model="p1"]').click();await page.locator('#model-drawer').waitFor({state:'visible'});
   assert.equal(await page.locator('#model-wake-group').isVisible(),true);
@@ -99,6 +104,7 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
   // Discover loads on demand, not on every overview poll.
   assert.equal(discoveryHits,0);
   await page.locator('[data-model-view="discover"]').click();
+  assert.equal(await page.locator('[data-model-view="discover"]').getAttribute('aria-pressed'),'true');assert.equal(await page.locator('[data-model-view="ready"]').getAttribute('aria-pressed'),'false');
   await page.waitForFunction(()=>document.querySelectorAll('#discover-gateways .item').length===2);
   assert.equal(discoveryHits,1);
   const refreshed1=page.waitForResponse(r=>r.url().includes('/api/v1/overview'));
@@ -118,31 +124,39 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
   assert.match(await page.locator('#discover-catalog-note').textContent(),/not proof/);
   let catalogText=await page.locator('#discover-catalog').textContent();
   assert.match(catalogText,/Model Y/);assert.match(catalogText,/Model Z/);
-  assert.equal(await page.locator('#discover-catalog button',{hasText:'Add route in LiteLLM'}).count(),1);
-  await page.locator('[data-route-handoff="other/model-z"]').click();
-  const guide=page.locator('#route-handoff');await guide.waitFor({state:'visible'});
-  assert.match(await guide.textContent(),/openrouter\/other\/model-z/);
-  const catalogLink=page.locator('#handoff-open');
-  assert.equal(await catalogLink.getAttribute('href'),'https://litellm.example.invalid/ui/models-and-endpoints/');
-  assert.equal(await catalogLink.getAttribute('target'),'_blank');
-  assert.match(await catalogLink.getAttribute('rel'),/noopener/);
-  await page.locator('#handoff-copy-alias').click();
-  assert.equal(await page.evaluate(()=>navigator.clipboard.readText()),'other/model-z');
-  await page.locator('#handoff-check').click();
-  await page.waitForFunction(()=>document.querySelector('#handoff-result').textContent.includes('No route named'));
-  await page.locator('#handoff-existing').selectOption('published-route');
-  assert.equal(await page.locator('#handoff-open').getAttribute('href'),'https://litellm.example.invalid/ui/models-and-endpoints/?model_group=published-route');
-  await page.locator('#handoff-check').click();
-  await page.waitForFunction(()=>document.querySelector('#handoff-result').textContent.includes('Nothing was published or refreshed'));
+  assert.equal(await page.locator('#discover-catalog button',{hasText:'Add and publish…'}).count(),1);
+  await page.locator('[data-route-add="other/model-z"]').click();
+  const card=page.locator('#route-add');await card.waitFor({state:'visible'});
+  assert.match(await card.textContent(),/openrouter\/other\/model-z/);
+  assert.match(await card.textContent(),/\$0\.50 \/ \$1\.50 per M tokens/);
+  await page.waitForFunction(()=>document.querySelector('#route-add-credential').value==='openrouter');
+  assert.equal(await page.locator('#route-add-name').inputValue(),'model-z');
+  assert.equal(await page.locator('#route-add-context').inputValue(),'16384');
+  assert.equal(await page.locator('#route-add-output').inputValue(),'4096');
+  // Typing moves on without the card being rebuilt under the cursor.
+  await page.locator('#route-add-name').fill('model-z-route');await page.keyboard.press('Tab');
+  assert.equal(await page.evaluate(()=>document.activeElement?.id),'route-add-context');
+  await page.locator('#route-add-name').fill('model-z');
+  // The output default follows the context until an output is typed, and then stays.
+  await page.locator('#route-add-context').fill('8000');assert.equal(await page.locator('#route-add-output').inputValue(),'2000');
+  await page.locator('#route-add-context').fill('16384');assert.equal(await page.locator('#route-add-output').inputValue(),'4096');
+  await page.locator('#route-add-output').fill('3000');await page.locator('#route-add-context').fill('8000');assert.equal(await page.locator('#route-add-output').inputValue(),'3000');
+  await page.locator('#route-add-context').fill('16384');await page.locator('#route-add-output').fill('4096');
+  // Where prompts go is never inferred: nothing can be added until it is chosen.
+  assert.equal(await page.locator('#route-add-confirm').isDisabled(),true);
+  assert.deepEqual(added,[]);
+  await page.locator('[name=route-add-destination][value=external]').check();
+  await page.locator('#route-add-confirm').click();
+  await card.waitFor({state:'hidden'});
+  assert.deepEqual(added,[{endpoint_id:'gw',catalog_id:'other/model-z',route:'model-z',credential:'openrouter',context_tokens:16384,max_output_tokens:4096,data_destination:'external'}]);
   assert.equal(syncHits,0);
-  await page.locator('#handoff-dismiss').click();await guide.waitFor({state:'hidden'});
 
   // A gateway edit does not silently mutate the saved profile or its limits.
   discovery.gateways[0].routes[1].upstream_model='openrouter/vendor/model-next';
   discovery.gateways[0].routes[1].profile.model_changed=true;
   discovery.gateways[0].routes[1].profile.served_model='openrouter/vendor/model-x';
   await page.locator('#discover-refresh').click();
-  await page.waitForFunction(()=>document.querySelector('#discover-gateways').textContent.includes('Published profile needs refresh'));
+  await page.waitForFunction(()=>document.querySelector('#discover-gateways').textContent.includes('Published model needs refresh'));
   page.once('dialog',dialog=>dialog.dismiss());
   await page.locator('[data-route-sync="p2"]').click();assert.equal(syncHits,0);
   page.once('dialog',dialog=>dialog.accept());
@@ -198,7 +212,9 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
   assert.equal(await page.locator('#model-steps [aria-current="step"]').textContent(),'Where it runs');
   // A hand-entered ID on a machine is managed like its listed models, and the
   // choice appears only once something is typed.
-  await page.locator('[name="model-source"][value="node:orion"]').check();await page.locator('#source-endpoint').selectOption('server');await page.locator('#model-next').click();
+  await page.locator('[name="model-source"][value="node:orion"]').check();
+  assert.equal(await page.locator('#model-drawer-dirty').isVisible(),false,'choosing where it runs alone is not an unsaved change');
+  await page.locator('#source-endpoint').selectOption('server');await page.locator('#model-next').click();
   await page.locator('#model-choices .choice',{hasText:'qwen3.8-27b-mtp'}).waitFor();
   assert.equal(await page.locator('#model-manual-runtime-row').isVisible(),false);
   await page.locator('#model-manual-id').fill('hand-typed');

@@ -1,9 +1,15 @@
-(()=>{const legacy=localStorage.getItem("rcharm-token");if(legacy&&!localStorage.getItem("poundlock-token"))localStorage.setItem("poundlock-token",legacy);localStorage.removeItem("rcharm-token")})();
-const state={token:localStorage.getItem("poundlock-token")||"",data:null,selectedJob:null,jobTimer:null,reveal:null,nodePoll:null,page:null,session:0};
+// A token is kept for this tab only, unless the operator asks to remember it on this device.
+function storedToken(){return localStorage.getItem("poundlock-token")||sessionStorage.getItem("poundlock-token")||""}
+function forgetToken(){localStorage.removeItem("poundlock-token");sessionStorage.removeItem("poundlock-token")}
+function storeToken(token,remember){forgetToken();(remember?localStorage:sessionStorage).setItem("poundlock-token",token)}
+// Browsers and password managers offer to save any password field, so where text can
+// be masked the token field is masked text instead.
+if(CSS.supports("-webkit-text-security","disc")){document.getElementById("token").type="text";document.getElementById("token").classList.add("masked")}
+const state={token:storedToken(),data:null,selectedJob:null,jobTimer:null,reveal:null,nodePoll:null,nodePolling:false,page:null,session:0};
 const $=id=>document.getElementById(id);
 const esc=value=>String(value??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 const terminal=status=>["completed","failed","cancelled"].includes(status);
-function beginSession(){state.session+=1;if(typeof clearPendingJob==="function")clearPendingJob();return state.session}
+function beginSession(){state.session+=1;clearPendingJob();return state.session}
 function sessionExpired(session){return session!==state.session}
 function auth(){return {session:state.session,token:state.token}}
 function live(snapshot){return !sessionExpired(snapshot.session)&&state.token===snapshot.token}
@@ -13,7 +19,7 @@ function fail(error){if(!error?.stale)toast(error.message,true)}
 async function api(path,options={}){
   const snapshot=auth();
   const response=await fetch(path,{...options,headers:{"content-type":"application/json","authorization":`Bearer ${snapshot.token}`,...options.headers}});
-  const body=await response.json().catch(()=>({error:{message:"Invalid server response"}}));
+  const body=await response.json().catch(()=>({error:{message:response.ok?"Invalid server response":`Can't reach the controller (${response.status})`}}));
   if(!live(snapshot))throw staleError();
   if(!response.ok){const error=new Error(body.error?.message||`Request failed (${response.status})`);error.status=response.status;throw error}
   return body;
@@ -42,10 +48,55 @@ function applyTheme(value){
 // Empty state: what is absent, then what to do about it. Never apologise.
 function emptyState(el,absent,action){el.className="list empty";el.innerHTML=`<span>${esc(absent)}</span><span>${esc(action)}</span>`}
 
-function toast(message,error=false){const el=$("toast");el.textContent=message;el.className=error?"show error":"show";clearTimeout(toast.timer);toast.timer=setTimeout(()=>el.className="",3500)}
+// An error in an open drawer sits above its footer, in the form's flow: fixed over the drawer it
+// covered the fields it was about, and its Dismiss was outside the focus trap (UX audit, 2 Nov).
+function seatToast(){
+  const el=$("toast"),drawer=el.classList.contains("error")?document.querySelector(".drawer:not([hidden])"):null;
+  if(drawer)drawer.querySelector(".drawer-footer").before(el);
+  else $("model-drawer-backdrop").before(el);
+}
+// An error stays until it is dismissed or replaced, so it can be read; it is an alert,
+// and its Dismiss button reaches a keyboard (UX audit, 30 Oct).
+function toast(message,error=false){
+  const el=$("toast");
+  el.setAttribute("role",error?"alert":"status");el.className=error?"show error":"show";seatToast();
+  el.replaceChildren(document.createTextNode(message));
+  if(error){const close=document.createElement("button");close.type="button";close.className="toast-dismiss";close.textContent="Dismiss";close.onclick=()=>{const inDrawer=el.closest(".drawer");el.className="";seatToast();if(inDrawer)drawerFocusable().at(-1)?.focus()};el.append(" ",close)}
+  clearTimeout(toast.timer);if(!error)toast.timer=setTimeout(()=>el.className="",3500);
+}
+// Scrolls glide only for those who have not asked the system for less motion.
+function motion(){return matchMedia("(prefers-reduced-motion: reduce)").matches?"auto":"smooth"}
+// A hint right after a label is that field's description, read out with it: 53 hints
+// were tied to nothing (UX audit, 30 Oct). A label holding a radio group is left alone.
+document.querySelectorAll(".hint").forEach((hint,index)=>{
+  const label=hint.previousElementSibling;
+  if(label?.tagName!=="LABEL")return;
+  const controls=label.querySelectorAll("input:not([type=radio]),select,textarea");
+  if(controls.length!==1)return;
+  hint.id||=`hint-${index}`;
+  const control=controls[0],described=control.getAttribute("aria-describedby");
+  if(!described?.split(" ").includes(hint.id))control.setAttribute("aria-describedby",[described,hint.id].filter(Boolean).join(" "));
+});
+// A rebuild keeps the operator's place: the focused control, found again by its
+// data attribute (or its details' for a summary), and each scrolled box's offset.
+function focusKey(root){
+  const el=document.activeElement;if(!el||el===root||!root.contains(el))return null;
+  const owner=el.tagName==="SUMMARY"?el.parentElement:el,attr=[...owner.attributes].find(a=>a.name.startsWith("data-"));
+  if(!attr)return null;
+  const key=`${owner.tagName.toLowerCase()}[${attr.name}="${CSS.escape(attr.value)}"]`;
+  return el.tagName==="SUMMARY"?`${key} > summary`:key;
+}
+function keepPlace(root){return {focus:focusKey(root),scrolls:[...root.querySelectorAll("pre,.list")].map(el=>el.scrollTop)}}
+function restorePlace(root,place){
+  root.querySelectorAll("pre,.list").forEach((el,index)=>{if(place.scrolls[index])el.scrollTop=place.scrolls[index]});
+  if(place.focus)root.querySelector(place.focus)?.focus({preventScroll:true});
+}
 function options(items,label){return items.map(item=>`<option value="${esc(item.id)}">${esc(label(item))}</option>`).join("")}
 function updateOptions(id,html,selected=$(id).value){
-  const select=$(id);
+  const select=$(id),next=document.createElement("select");
+  // Rebuilding an unchanged list on a refresh would close it while it is open.
+  next.innerHTML=html;
+  if(next.innerHTML===select.innerHTML&&select.value===selected)return;
   select.innerHTML=html;
   select.setCustomValidity("");
   if(!selected){if([...select.options].some(option=>option.value===""))select.value="";return}
@@ -55,6 +106,9 @@ function updateOptions(id,html,selected=$(id).value){
   select.setCustomValidity("This selection is no longer available. Choose another.");
 }
 document.addEventListener("change",event=>{if(event.target instanceof HTMLSelectElement)event.target.setCustomValidity("")});
+// The browser marks a field that fails validation on screen; this tells a screen reader too.
+document.addEventListener("invalid",event=>event.target.setAttribute("aria-invalid","true"),true);
+for(const type of ["input","change"])document.addEventListener(type,event=>{if(event.target.validity?.valid)event.target.removeAttribute("aria-invalid")});
 // Generic badge: cls is one of the semantic state buckets in app.css (ok,
 // active, review, fault, ended, unknown, unrecognised), or a raw job-status
 // value that app.css maps to one of those buckets.
@@ -75,7 +129,8 @@ function jobBucket(status){return JOB_STATUS_BUCKETS[status]||"unrecognised"}
 function rowIndicator(bucket,tick=false){return `<span class="row-indicator ${tick?"tick ":""}${esc(bucket)}" aria-hidden="true"></span>`}
 function verificationBadge(job){
   if(job.status!=="completed")return "";
-  const status=job.result?.provenance?.verification?.status;
+  // List rows leave the result out; the controller sends its verification status.
+  const status=job.verification;
   if(status==="passed")return badge("passed","Checks passed");
   if(status==="failed")return badge("failed","Checks failed");
   return badge("unverified","Unverified");
@@ -124,7 +179,7 @@ async function refresh(opts={}){
     if(!live(snapshot)||!state.token)throw staleError();
     state.data=data;
     $("unlock").hidden=true;$("application").hidden=false;
-    $("status-text").textContent=state.data.role==="developer"?"Connected · Jobs access":`Connected · v${state.data.version}`;document.querySelector(".status").classList.add("online");
+    $("status-text").textContent=state.data.role==="developer"?"Connected · Jobs access":`Connected · v${state.data.version}${state.data.build?` · ${state.data.build}`:""}`;$("status-text").title=$("status-text").textContent;document.querySelector(".status").classList.add("online");
     for(const name of ["nodes","models","connections","access"])document.querySelector(`[data-tab="${name}"]`).hidden=state.data.role!=="operator";
     render();
     syncNavigation();
@@ -139,22 +194,28 @@ function canJob(permission){return state.data.role==="operator"||(state.data.per
 function render(){
   const d=state.data;
   renderSummary();
-  for(const [id,items,label] of [["job-project",d.projects,x=>x.name],["job-model",d.models,x=>x.name],["job-harness",d.harnesses,x=>`${x.name} ${x.version}`]]){
-    updateOptions(id,options(items,label));
+  // Only models that can run jobs, as job-options offers them.
+  const jobModels=(d.models||[]).filter(model=>(model.uses||[]).includes("durable"));
+  for(const [id,items,label] of [["job-project",d.projects,x=>x.name],["job-model",jobModels,x=>x.name],["job-harness",d.harnesses,x=>`${x.name} ${x.version}`]]){
+    // The model is chosen on purpose, not whichever sorts first.
+    const choose=id==="job-model"&&items.length>1?'<option value="">Choose a model</option>':"";
+    updateOptions(id,choose+options(items,label));
   }
+  // One harness is no choice: shown, not offered.
+  $("job-harness").disabled=(d.harnesses||[]).length===1;
   $("job-git-hosts").textContent=`Approved repository hosts: ${(d.git_hosts||[]).join(", ")||"None configured. Ask the operator or upload a folder."}`;
   $("job-network").disabled=!d.outbound_network_allowed;
-  $("job-network-hint").textContent=d.outbound_network_allowed?"Allows the agent and verification commands to install dependencies and contact the internet and reachable local services.":"Outbound access is disabled by the operator. Checks run without network access; the agent can contact only its assigned model.";
+  $("job-network-hint").textContent=d.outbound_network_allowed?"The agent and verification commands can install dependencies and reach the internet on ports 80 and 443, never your local network or Poundlock's own services.":"Internet access is turned off by the operator. Checks run without network access; the agent can contact only its assigned model.";
   const verifier=d.verifier;
-  $("job-toolchain").textContent=verifier?`Independent checks use CPython ${verifier.python} and uv ${verifier.uv}. Writable exec: ${(verifier.writable_exec_paths||[]).join(", ")}.`:"This controller does not advertise a verifier toolchain.";
+  $("job-toolchain").textContent=verifier?`Independent checks run with Node.js, CPython ${verifier.python} and uv ${verifier.uv}. Writable exec: ${(verifier.writable_exec_paths||[]).join(", ")}.`:"This controller does not say which tools its checks run with.";
   $("job-registered-option").hidden=d.role!=="operator";
   $("job-form").hidden=!canJob("jobs:submit");
   if(d.role!=="operator"&&$("job-source").value==="registered"){$("job-source").value="snapshot";sourceMode()}
   renderJobs();
-  if(typeof renderProjects==="function")renderProjects();
-  if(typeof renderConnections==="function")renderConnections();
-  if(typeof renderModels==="function")renderModels();
-  if(typeof renderMachines==="function")renderMachines();
+  renderProjects();
+  renderConnections();
+  renderModels();
+  renderMachines();
   renderAccess();
 }
 
@@ -164,21 +225,23 @@ function occupancyLabel(){
   return "In use · "+occ.map(slot=>{
     const node=state.data.nodes.find(n=>n.id===slot.node_id);
     const name=node?node.name:slot.node_id.slice(0,8);
-    const kind=slot.kind==="job"?"durable job":"interactive";
+    const kind=slot.kind==="job"?"running a job":"serving a request";
     const job=slot.job_id?` (${slot.job_id.slice(0,8)})`:"";
-    const profiles=(slot.profiles||[]).join(", ");
+    // A compatibility alias names the same profile; show the profile's own name once.
+    const named=new Map((state.data.models||[]).flatMap(model=>[[model.name,model.name],...(model.aliases||[]).map(alias=>[alias,model.name])]));
+    const profiles=[...new Set((slot.profiles||[]).map(name=>named.get(name)||name))].join(", ");
     const who=profiles?`${profiles}`:`${name} / ${slot.runtime_profile}`;
     return `${who} · ${kind}${job}`;
   }).join("; ");
 }
 
-function metricCard(label,value,cls){return `<div class="metric${cls?" "+esc(cls):""}"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`}
+function metricCard(label,value,cls,page){const tag=page?"a":"div";return `<${tag} class="metric${cls?" "+esc(cls):""}"${page?` href="#${esc(page)}"`:""}><strong>${esc(value)}</strong><span>${esc(label)}</span></${tag}>`}
 function renderSummary(){
   const d=state.data;
   const online=d.nodes.filter(n=>n.status==="online").length;
   if(d.role==="developer"){
     const inProgress=d.jobs.filter(j=>!terminal(j.status)).length;
-    $("summary").innerHTML=metricCard("Jobs",d.jobs.length)+metricCard("In progress",inProgress,inProgress?"attention":"");
+    $("summary").innerHTML=metricCard("Jobs",d.jobs.length,"","jobs")+metricCard("In progress",inProgress,inProgress?"attention":"","jobs");
     $("occupancy-detail").textContent="";
     return;
   }
@@ -188,102 +251,31 @@ function renderSummary(){
   const running=d.jobs.filter(j=>j.status==="running").length;
   const disabledModels=d.models.filter(m=>m.retirement?.disabled).length;
   $("summary").innerHTML=[
-    metricCard("Controller",`v${d.version}`),
-    metricCard("Endpoints",d.endpoints.length),
-    metricCard("Profiles",disabledModels?`${d.models.length} (${disabledModels} out)`:d.models.length,disabledModels?"ended":""),
-    metricCard("Machines",`${online} / ${nonRevoked}`,missingRunner?"warn":""),
-    metricCard("Queued",queued,queued?"attention":""),
-    metricCard("Running",running,running?"attention":""),
+    metricCard("Machines online",`${online} / ${nonRevoked}`,missingRunner?"warn":"","machines"),
+    metricCard("Models",disabledModels?`${d.models.length} (${disabledModels} out)`:d.models.length,disabledModels?"ended":"","models"),
+    metricCard("Servers and gateways",d.endpoints.length,"","connections"),
+    metricCard("Queued",queued,queued?"attention":"","jobs"),
+    metricCard("Running",running,running?"attention":"","jobs"),
   ].join("");
-  $("occupancy-detail").textContent=occupancyLabel();
+  $("occupancy-detail").textContent=$("occupancy-detail").title=occupancyLabel();
 }
 
-function renderJobs(){
-  const list=$("job-list"),jobs=state.data.jobs;
-  if(!jobs.length){emptyState(list,"No jobs yet.","Submit one on the left to get started.");return}
-  list.className="list";list.innerHTML=jobs.map(job=>`<button type="button" class="item${job.status==="running"?" in-flight":""}" data-job="${esc(job.id)}">${rowIndicator(jobBucket(job.status))}<strong>${esc(job.prompt.slice(0,90))}</strong><div class="meta">${jobBadge(job.status)}${verificationBadge(job)}<span>${new Date(job.created_at).toLocaleString()}</span><span class="mono">${esc(job.id.slice(0,8))}</span></div></button>`).join("");
-  list.querySelectorAll("[data-job]").forEach(item=>item.onclick=()=>showJob(item.dataset.job));
-}
-
-async function showJob(id){
-  const newlySelected=state.selectedJob!==id;
-  const snapshot=auth();
-  state.selectedJob=id;clearTimeout(state.jobTimer);
-  try{
-    const [job,events]=await Promise.all([api(`/api/v1/jobs/${id}`),api(`/api/v1/jobs/${id}/events`)]);
-    if(!live(snapshot)||!state.data||state.selectedJob!==id)return;
-    const index=state.data.jobs.findIndex(item=>item.id===job.id);
-    if(index>=0)state.data.jobs[index]=job;else state.data.jobs.unshift(job);
-    renderSummary();renderJobs();
-    const detail=$("job-detail");detail.hidden=false;
-    const result=job.result,verification=result?.provenance?.verification;
-    const previous=result?.provenance?.previous_attempts||[],attempt=previous.length+1;
-    detail.innerHTML=`<header><div><p class="eyebrow">JOB <code class="mono">${esc(job.id)}</code></p><h3>${jobBadge(job.status)} ${esc(job.prompt.slice(0,140))}</h3></div>${terminal(job.status)||!canJob("jobs:cancel")?"":`<div class="actions"><button id="cancel-job">Cancel</button></div>`}</header>
-      ${job.error?`<p class="check-fail">${esc(job.error.message||job.error.code)}</p>`:""}
-      ${result?`<div class="result-summary"><strong>${verification?.status==="passed"?"Checks passed":verification?.status==="failed"?"Checks failed":"Unverified"}</strong><span>${attempt} attempt${attempt===1?"":"s"}</span><span>${result.cleanup?.containers_removed&&result.cleanup?.attempt_directory_removed?"Working files removed":"See cleanup details"}</span></div>${verificationDetails(verification)}${patchDetails(result.patches||[],attempt)}
-      ${previous.length?`<details><summary>Earlier attempts (${previous.length})</summary>${previous.map(item=>`<h4>Attempt ${esc(item.number)}</h4>${verificationDetails(item.verification)}${patchDetails(item.patches||[],item.number)}<details><summary>Agent output</summary><pre>${esc(item.output)}</pre></details>`).join("")}</details>`:""}
-      <details><summary>Agent output</summary><pre>${esc(result.output||"No output retained.")}</pre></details>`:""}
-      <details ${terminal(job.status)?"":"open"}><summary>Timeline</summary><div class="list">${events.map(e=>`<div class="item"><strong>${esc(e.message)}</strong><div class="meta"><span>${new Date(e.created_at).toLocaleTimeString()}</span></div></div>`).join("")}</div></details>
-      <details><summary>Job details</summary><h4>Request</h4><pre>${esc(job.prompt)}</pre><h4>Checks and permissions</h4><pre>${esc(JSON.stringify(job.policy||{},null,2))}</pre>${job.error?`<h4>Error details</h4><pre>${esc(JSON.stringify(job.error,null,2))}</pre>`:""}${result?`<h4>Provenance</h4><pre>${esc(JSON.stringify({...result.provenance,previous_attempts:undefined},null,2))}</pre><h4>Cleanup</h4><pre>${esc(JSON.stringify(result.cleanup,null,2))}</pre>`:""}</details>`;
-    detail.querySelectorAll("[data-patch]").forEach(button=>button.onclick=()=>downloadPatch(job.id,button.dataset.patch,button.dataset.attempt));
-    $("cancel-job")?.addEventListener("click",async()=>{await api(`/api/v1/jobs/${id}/cancel`,{method:"POST",body:"{}"});toast("Cancellation requested");await refresh();await showJob(id)});
-    if(newlySelected)detail.scrollIntoView({behavior:"smooth",block:"start"});
-    if(!terminal(job.status)&&state.selectedJob===id&&live(snapshot))state.jobTimer=setTimeout(()=>showJob(id),2000);
-  }catch(error){fail(error)}
-}
-
-function verificationDetails(report){
-  if(!report)return `<p class="hint">No independent verification was recorded.</p>`;
-  return `<p>${esc(report.reason||"No verification commands were supplied.")}</p>${report.changed_protected_paths?.length?`<p class="check-fail">Changed protected paths: ${esc(report.changed_protected_paths.join(", "))}</p>`:""}${report.flagged_paths?.length?`<p class="check-fail">Review before applying; these change how Git applies or checks out files: ${esc(report.flagged_paths.join(", "))}</p>`:""}${(report.commands||[]).map(check=>`<details><summary>${check.exit_code===0&&!check.truncated&&!check.error?"Passed":"Failed"}: ${esc(check.command)}</summary><p class="hint">${esc(check.cwd||"Starting folder")} · ${esc(check.duration_ms)} ms · Exit ${esc(check.exit_code??"unavailable")}${check.truncated?" · Output truncated":""}</p>${check.error?`<p class="check-fail">${esc(check.error)}</p>`:""}<pre>${esc(check.output||"No output.")}</pre></details>`).join("")}`;
-}
-function patchDetails(patches,attempt){
-  if(!patches.some(patch=>patch.patch))return `<p class="hint">No code changes were retained for this attempt.</p>`;
-  return patches.map((patch,index)=>patch.patch?`<section class="patch"><div class="patch-heading"><h4>${esc(patch.root)}</h4><button class="secondary" data-patch="${index}" data-attempt="${esc(attempt)}">Download patch</button></div><p class="hint">Base revision: ${esc(patch.base_revision)}</p><details open><summary>View changes</summary><pre class="diff">${patch.patch.split("\n").map(line=>`<span class="${line.startsWith("+")?"diff-add":line.startsWith("-")?"diff-remove":""}">${esc(line)}</span>`).join("\n")}</pre></details></section>`:"").join("");
-}
-async function downloadPatch(id,index,attempt){
-  const snapshot=auth();
-  try{
-    const {response}=await authorized(`/api/v1/jobs/${encodeURIComponent(id)}/patches/${index}?attempt=${encodeURIComponent(attempt)}`);
-    if(!response.ok)throw new Error(`Patch download failed (${response.status}).`);
-    const blob=await response.blob();
-    if(!live(snapshot))throw staleError();
-    const url=URL.createObjectURL(blob),link=document.createElement("a");
-    link.href=url;link.download=`poundlock-${id.slice(0,8)}-attempt-${attempt}-root-${index}.patch`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
-  }catch(error){fail(error)}
-}
-
-// Managed-identity statuses reported by the controller: active, revoked,
-// provision_failed. Anything else is unrecognised.
-const IDENTITY_STATE={active:["ok","Active"],revoked:["ended","Revoked"],provision_failed:["fault","Provisioning failed"]};
-function identityBadge(status){const [cls,label]=IDENTITY_STATE[status]||["unrecognised",status];return badge(cls,label)}
-function renderAccess(){
-  const list=$("api-token-list"),tokens=state.data.api_tokens||[];
-  if(!tokens.length){emptyState(list,"No application tokens.","Create one below for another editor or integration.")}
-  else{
-    list.className="list";list.innerHTML=tokens.map(token=>`<div class="item">${rowIndicator(token.revoked_at?"ended":"ok")}<strong>${esc(token.name)}</strong><div class="meta">${badge(token.revoked_at?"ended":"ok",token.revoked_at?"Revoked":"Active")}<span>${esc(token.permissions.join(", "))}</span></div><div class="meta"><span>Created ${new Date(token.created_at).toLocaleString()}</span><span>${token.last_used_at?`Last used ${new Date(token.last_used_at).toLocaleString()}`:"Never used"}</span></div>${token.revoked_at?"":`<div class="item-actions"><button class="secondary" data-revoke-token="${esc(token.id)}">Revoke</button></div>`}</div>`).join("");
-    list.querySelectorAll("[data-revoke-token]").forEach(button=>button.onclick=async()=>{if(!confirm("Revoke this token? The application using it loses access immediately, its streams stop, and its queued and running jobs are cancelled."))return;try{await api(`/api/v1/api-tokens/${button.dataset.revokeToken}/revoke`,{method:"POST",body:"{}"});toast("Token revoked");await refresh()}catch(error){fail(error)}});
-  }
-  const identities=state.data.managed_identities||[],managedList=$("managed-identity-list");
-  if(!identities.length){emptyState(managedList,"No managed identities.","They appear once a gateway with separate application identities is configured.")}
-  else{
-    managedList.className="list";managedList.innerHTML=identities.map(identity=>{const token=tokens.find(item=>item.id===identity.api_token_id),endpoint=(state.data.endpoints||[]).find(item=>item.id===identity.endpoint_id);return `<div class="item"><strong>${esc(token?.name||"Removed application token")}</strong><div class="meta">${identityBadge(identity.status)}<span>${esc(endpoint?.name||"Removed gateway")}</span></div>${identity.last_error?`<p class="check-fail">${esc(identity.last_error)}</p>`:""}<div class="meta"><span>Updated ${new Date(identity.updated_at).toLocaleString()}</span></div></div>`}).join("");
-  }
-}
-
-
+// Nothing tests in the background, so a pass older than a day is history, not health.
+function checkFresh(item){return Boolean(item.last_checked_at)&&Date.now()-new Date(item.last_checked_at)<86400000}
+function checkIndicator(item){return item.last_check_ok===false?"fault":item.last_check_ok===true&&checkFresh(item)?"ok":"unknown"}
 function checkLabel(item){
-  if(item.last_check_ok===true)return `<span class="check-ok">Passed${item.last_check_message?": "+esc(item.last_check_message):""}</span>${item.last_checked_at?`<div class="meta"><span>${new Date(item.last_checked_at).toLocaleString()}</span></div>`:""}`;
-  if(item.last_check_ok===false)return `<span class="check-fail">Failed${item.last_check_message?": "+esc(item.last_check_message):""}</span>${item.last_checked_at?`<div class="meta"><span>${new Date(item.last_checked_at).toLocaleString()}</span></div>`:""}`;
-  return `<span class="check-none">Not checked</span>`;
+  if(item.last_check_ok===true)return `<span class="${checkFresh(item)?"check-ok":"check-none"}">${checkFresh(item)?"Test passed":"Last test passed"}${item.last_check_message?": "+esc(item.last_check_message):""}</span>${item.last_checked_at?`<div class="meta"><span>${new Date(item.last_checked_at).toLocaleString()}</span></div>`:""}`;
+  if(item.last_check_ok===false)return `<span class="check-fail">Test failed${item.last_check_message?": "+esc(item.last_check_message):""}</span>${item.last_checked_at?`<div class="meta"><span>${new Date(item.last_checked_at).toLocaleString()}</span></div>`:""}`;
+  return `<span class="check-none">Not tested yet</span>`;
 }
 
-$("token-form").addEventListener("submit",async event=>{event.preventDefault();const session=beginSession();state.token=$("token").value;try{await refresh();if(sessionExpired(session))return;localStorage.setItem("poundlock-token",state.token);localStorage.removeItem("rcharm-token")}catch(error){if(error.stale||sessionExpired(session))return;if($("application").hidden)state.token="";toast(error.message,true)}});
+$("token-form").addEventListener("submit",async event=>{event.preventDefault();const session=beginSession();state.token=$("token").value;try{await refresh();if(sessionExpired(session))return;storeToken(state.token,$("remember-token").checked)}catch(error){if(error.stale||sessionExpired(session))return;if($("application").hidden)state.token="";toast(error.message,true)}});
 $("refresh").onclick=async()=>{try{await refresh();if(state.selectedJob)await showJob(state.selectedJob)}catch(error){fail(error)}};
 $("sign-out").onclick=()=>{
   beginSession();
   clearTimeout(state.jobTimer);clearInterval(state.nodePoll);
   state.token="";state.data=null;state.selectedJob=null;state.page=null;state.nodePoll=null;state.jobTimer=null;
-  localStorage.removeItem("poundlock-token");localStorage.removeItem("rcharm-token");
+  forgetToken();
   clearReveal();
   $("application").hidden=true;$("unlock").hidden=false;$("token").value="";
   const detail=$("job-detail");if(detail){detail.hidden=true;detail.innerHTML=""}
@@ -292,28 +284,36 @@ $("sign-out").onclick=()=>{
 function syncNavigation(){
   if(!state.data)return;
   const routes={jobs:"jobs",machines:"nodes",models:"models",connections:"connections",access:"access","linux-guide":"nodes"};
-  let page=location.hash.slice(1);
+  const [requested,jobLink]=location.hash.slice(1).split("/");
+  let page=requested;
   if(!Object.hasOwn(routes,page)||(routes[page]!=="jobs"&&state.data.role!=="operator"))page="jobs";
-  if(location.hash!==`#${page}`)history.replaceState(null,"",`#${page}`);
+  const hash=page==="jobs"&&jobLink?`#jobs/${jobLink}`:`#${page}`;
+  if(location.hash!==hash)history.replaceState(null,"",hash);
+  if(page==="jobs"&&jobLink&&state.selectedJob!==jobLink)showJob(jobLink);
   if(state.page===page)return;
+  const previous=state.page;
   state.page=page;
   const tab=routes[page];
   document.querySelectorAll("[data-tab]").forEach(button=>{
     const active=button.dataset.tab===tab;
     button.classList.toggle("active",active);
-    if(active)button.setAttribute("aria-current","page");else button.removeAttribute("aria-current");
+    if(active){button.setAttribute("aria-current","page");document.title=`${button.textContent.trim()} · poundlock`}
+    else button.removeAttribute("aria-current");
   });
   document.querySelectorAll(".tab").forEach(section=>section.classList.toggle("active",section.id===tab));
   clearReveal();
   clearInterval(state.nodePoll);state.nodePoll=null;
-  if(tab==="nodes")state.nodePoll=setInterval(()=>refresh({keepReveal:true}).catch(()=>{}),4000);
+  // One poll at a time, and none while the tab is hidden: each read the whole overview (UX audit, 30 Oct).
+  if(tab==="nodes")state.nodePoll=setInterval(()=>{
+    if(document.hidden||state.nodePolling)return;
+    state.nodePolling=true;
+    refresh({keepReveal:true}).catch(()=>{}).finally(()=>{state.nodePolling=false});
+  },4000);
+  // A tab shows what is true now, not what it showed when last opened (UX audit, Oct 2026).
+  else if(previous)refresh().catch(()=>{});
   if(page==="linux-guide"){$("linux-guide").open=true;$("linux-guide").scrollIntoView({block:"start"})}
 }
 document.querySelectorAll("[data-tab]").forEach(button=>button.onclick=()=>{
   location.hash=button.dataset.tab==="nodes"?"machines":button.dataset.tab;
 });
 window.addEventListener("hashchange",syncNavigation);
-$("api-token-form").addEventListener("submit",async event=>{event.preventDefault();const snapshot=auth();const permissions=[...document.querySelectorAll('[name="api-permission"]:checked')].map(input=>input.value);try{const issued=await api("/api/v1/api-tokens",{method:"POST",body:JSON.stringify({name:$("api-token-name").value,permissions})});if(!live(snapshot))throw staleError();event.target.reset();await refresh();if(!live(snapshot))throw staleError();showReveal("api-token-issued",issued.token);toast("Token created")}catch(error){fail(error)}});
-$("copy-api-token").onclick=()=>copyReveal();
-$("copied-api-token").onclick=()=>{clearReveal();toast("Token cleared from this page")};
-$("reconcile-managed-identities").onclick=async event=>{const button=event.currentTarget;button.disabled=true;try{const result=await api("/api/v1/managed-identities/reconcile",{method:"POST",body:"{}"});await refresh();toast(result.pending?`${result.pending} revocation${result.pending===1?" is":"s are"} still pending`:`Reconciled ${result.reconciled} managed identit${result.reconciled===1?"y":"ies"}`)}catch(error){fail(error)}finally{button.disabled=false}};

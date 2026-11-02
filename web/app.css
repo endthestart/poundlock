@@ -103,7 +103,8 @@ input[type="radio"] {
 }
 
 :is(button, a, summary, input, select, textarea, [tabindex]):focus-visible {
-  outline: 2px solid var(--accent);
+  /* The text shade: Latte's plain accent is under 3:1 on its canvas. */
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
   box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent) 35%, transparent);
   border-radius: 3px;
@@ -147,7 +148,7 @@ header::after {
   margin: 0;
 }
 .header-title .lede {
-  color: var(--faint);
+  color: var(--muted);
   font-size: 12px;
   white-space: nowrap;
   overflow: hidden;
@@ -157,14 +158,24 @@ header::after {
   display: flex;
   align-items: center;
   gap: 14px;
-  flex: 0 0 auto;
+  flex: 0 1 auto;
+  min-width: 0;
 }
 .status {
   display: flex;
   align-items: center;
   gap: 7px;
-  color: var(--faint);
+  min-width: 0;
+  /* On the header's canvas, muted holds 4.5:1 where faint did not (UX audit, 30 Oct). */
+  color: var(--muted);
   font-size: 11.5px;
+}
+/* A dev build's version is long: it shortens rather than widen a phone's page. */
+#status-text {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 #status-dot {
   width: 7px;
@@ -247,15 +258,13 @@ main {
   border-radius: 12px;
   padding: 16px 18px;
 }
-.panel > h3,
-.panel > .section-heading {
+.panel > h3 {
   margin-top: 0;
 }
 
 /* Section headings: 10.5px uppercase, .15em tracking, weight 600, --faint,
    with a small accent glyph prefix. Used in place of oversized <h3>s. */
-h3,
-.section-heading {
+h3 {
   font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.15em;
@@ -266,8 +275,7 @@ h3,
   align-items: center;
   gap: 7px;
 }
-h3::before,
-.section-heading::before {
+h3::before {
   content: "▍";
   color: var(--accent);
   font-size: 10px;
@@ -312,6 +320,14 @@ h4 {
   padding: 12px 14px 11px;
   position: relative;
 }
+a.metric {
+  color: inherit;
+  text-decoration: none;
+}
+a.metric:hover,
+a.metric:focus-visible {
+  background: linear-gradient(180deg, var(--s3), var(--s2));
+}
 .metric::after {
   content: "";
   position: absolute;
@@ -346,8 +362,13 @@ h4 {
   letter-spacing: 0.13em;
   color: var(--faint);
 }
+/* One line, whatever loads, so the page doesn't jump; the full list is its title. */
 .occupancy {
   margin: 0 0 16px;
+  min-height: 1.5em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* -- Tabs / segmented ------------------------------------------------------ */
@@ -449,6 +470,23 @@ h4 {
 .item:last-child {
   border-bottom: 0;
 }
+/* A long job list scrolls, so the open job sits right below it. */
+#job-list {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+/* The job open below the list. */
+.item.selected {
+  /* s1 with an accent bar: a state badge's tint over s3 fell under 4.5:1 in Latte. */
+  background: var(--s1);
+  box-shadow: inset 3px 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--accent-text);
+}
+/* A long title takes the room, so the status dot stays beside it. */
+#job-list .item > strong {
+  flex: 1 1 0;
+  min-width: 0;
+}
 .item:hover {
   background: var(--s3);
 }
@@ -523,11 +561,6 @@ h4 {
   height: 13px;
   border-radius: 1px;
 }
-.row-indicator.dashed {
-  background: transparent;
-  border: 1px dashed var(--state-unknown);
-  border-radius: 50%;
-}
 /* Row-indicator state buckets, shared with the .badge state buckets below. */
 .row-indicator.ok {
   background: var(--state-ok);
@@ -585,7 +618,8 @@ h4 {
   letter-spacing: 0.02em;
   text-transform: none;
   border: 1px solid var(--line);
-  color: var(--muted);
+  /* Text on its raised s3 fill: muted there was 4.05:1 in Latte. */
+  color: var(--text);
   background: var(--s3);
   white-space: nowrap;
 }
@@ -603,15 +637,6 @@ h4 {
   color: var(--text);
   background: color-mix(in srgb, var(--text) 9%, transparent);
   border: 1px solid color-mix(in srgb, var(--text) 28%, transparent);
-}
-/* Ownership chip: colour = one of --own-1..5, set inline via style. */
-.own-chip {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex: 0 0 auto;
-  background: var(--own-color, var(--own-1));
 }
 
 /* -- Buttons ---------------------------------------------------------------- */
@@ -638,17 +663,44 @@ button.secondary {
 button.secondary:hover {
   background: var(--s3);
 }
+/* Removing and revoking cannot be undone: say so in the button (UX audit, Oct 2026). */
+button.secondary.danger {
+  color: var(--state-fault-text);
+  border-color: color-mix(in srgb, var(--state-fault) 45%, var(--line));
+}
+/* Operators come to see state: each tab's list leads and its form follows. */
+#jobs > .grid.two > .panel:not(form),
+#connections > .grid.two > .panel:not(form),
+#access > .grid.two > .panel:not(form) {
+  order: -1;
+}
+/* A row's rarer actions, folded so its one primary action leads (UX audit, Oct 2026). */
+.more-actions > summary {
+  width: fit-content;
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-weight: 650;
+}
+.more-actions[open] {
+  flex-basis: 100%;
+}
+.more-actions > div {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-top: 6px;
+}
 button:disabled {
   opacity: 0.5;
   cursor: wait;
 }
-button.danger,
 #cancel-job {
   background: transparent;
   color: var(--state-fault-text);
   border: 1px solid var(--state-fault);
 }
-button.danger:hover,
 #cancel-job:hover {
   background: color-mix(in srgb, var(--state-fault) 12%, transparent);
 }
@@ -790,6 +842,9 @@ details > summary {
   color: var(--muted);
   margin: 6px 0;
   font-size: 12px;
+  /* A pointer target of at least 24 px, as WCAG 2.5.8 asks (UX audit, 30 Oct). */
+  min-height: 24px;
+  line-height: 24px;
 }
 details > summary:hover {
   color: var(--text);
@@ -798,6 +853,15 @@ details > summary:hover {
   margin-bottom: 14px;
   scroll-margin-top: 76px;
   line-height: 1.6;
+}
+/* The guide's subheadings rank under the Machines heading but keep the subheading look. */
+.setup-guide h3 {
+  font-size: 11px;
+  font-weight: 650;
+  text-transform: none;
+  letter-spacing: normal;
+  color: var(--muted);
+  margin: 12px 0 8px;
 }
 .setup-guide > summary {
   font-size: 13px;
@@ -917,6 +981,7 @@ pre {
 }
 button.copy {
   padding: 1px 7px;
+  min-height: 24px;
   font-size: 10.5px;
   font-weight: 600;
 }
@@ -1124,7 +1189,7 @@ fieldset .check {
 .model-group-panel {
   margin-bottom: 12px;
 }
-.model-group-panel h4 {
+.model-group-panel h3 {
   margin: 0 0 8px;
   font-size: 11px;
   text-transform: uppercase;
@@ -1144,7 +1209,7 @@ fieldset .check {
 .discover-gateway {
   margin-bottom: 12px;
 }
-.discover-gateway h4 {
+.discover-gateway h3 {
   margin: 0 0 8px;
 }
 .discover-filters {
@@ -1153,12 +1218,6 @@ fieldset .check {
   gap: 10px;
   align-items: end;
   margin: 10px 0;
-}
-.publish-form {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px dashed var(--line);
-  flex-basis: 100%;
 }
 .route-test-result {
   min-height: 1em;
@@ -1222,6 +1281,28 @@ th {
 }
 #toast.error {
   border-color: var(--state-fault);
+}
+/* The token field: masked text, which nothing offers to save. */
+.masked {
+  -webkit-text-security: disc;
+}
+/* An error stays until dismissed. */
+.toast-dismiss {
+  margin-left: 8px;
+  padding: 2px 8px;
+  min-height: 24px;
+}
+#toast.show.error {
+  pointer-events: auto;
+}
+/* In an open drawer it sits above the footer, in the form's flow. */
+.drawer #toast {
+  position: static;
+  flex: none;
+  max-width: none;
+  max-height: 40%;
+  overflow: auto;
+  margin: 0 18px 10px;
 }
 
 /* -- Empty states ------------------------------------------------------------- */
@@ -1398,13 +1479,9 @@ th {
   background-size: 250% 100%;
   animation: sweep 2.1s linear infinite;
 }
-.under-load {
-  animation: throb 2.6s ease-in-out infinite;
-}
 @media (prefers-reduced-motion: reduce) {
   .status.online #status-dot,
-  .in-flight::after,
-  .under-load {
+  .in-flight::after {
     animation: none !important;
   }
 }
@@ -1443,6 +1520,10 @@ th {
   .header-title .lede {
     display: none;
   }
+  /* The theme names its flavours in full; on a phone the menu stays narrow. */
+  #theme-menu {
+    max-width: 7.5rem;
+  }
 }
 @media (max-width: 560px) {
   .tabs {
@@ -1459,4 +1540,17 @@ th {
   .metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
+}
+
+/* Read by screen readers, not shown: each tab's own heading (UX audit, 30 Oct). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

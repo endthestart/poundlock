@@ -1,25 +1,26 @@
-// Connections tab: inference endpoints (model servers and LiteLLM gateways).
+// Connections tab: model servers and LiteLLM gateways.
 let editingEndpoint=null;
 
 function renderConnections(){
   const d=state.data;
   const list=$("configured"),endpoints=d.endpoints;
-  if(!endpoints.length){emptyState(list,"No endpoints configured.","Add a model server or gateway below to publish model profiles.");return}
+  if(!endpoints.length){emptyState(list,"No servers or gateways yet.","Add one with the form beside this list, then publish its models.");return}
   list.className="list";
   list.innerHTML=endpoints.map(x=>{
-    const indicator=x.last_check_ok===true?"ok":x.last_check_ok===false?"fault":"unknown";
-    return `<div class="item" data-endpoint-row="${esc(x.id)}">${rowIndicator(indicator)}<strong>${esc(x.name)}</strong><div class="meta"><span class="pill">${x.kind==="litellm"?"Gateway (LiteLLM)":"Model server"}</span>${x.managed_identity?.enabled?'<span class="pill">Per-client identities</span>':""}<span class="mono">${esc(x.base_url)}</span>${x.public_url?`<span class="mono">${esc(x.public_url)}</span>`:""}</div>${serverDestinationHtml(x,d.models)}<div class="meta">${checkLabel(x)}</div><div class="item-actions"><button class="secondary" data-test-endpoint="${esc(x.id)}">Test</button> <button class="secondary" data-edit-endpoint="${esc(x.id)}">Edit</button>${x.managed_identity?.enabled?` <button class="secondary" data-rotate-endpoint="${esc(x.id)}">Rotate client keys</button>`:""} <button class="secondary" data-remove-endpoint="${esc(x.id)}">Remove</button></div></div>`;
+    const indicator=checkIndicator(x);
+    return `<div class="item" data-endpoint-row="${esc(x.id)}">${rowIndicator(indicator)}<strong>${esc(x.name)}</strong><div class="meta"><span class="pill">${x.kind==="litellm"?"Gateway (LiteLLM)":"Model server"}</span>${x.managed_identity?.enabled?'<span class="pill">Per-application keys</span>':""}<span class="mono">${esc(x.base_url)}</span>${x.public_url?`<span class="mono">${esc(x.public_url)}</span>`:""}</div>${serverDestinationHtml(x,d.models)}<div class="meta">${checkLabel(x)}</div><div class="item-actions"><button class="secondary" data-test-endpoint="${esc(x.id)}">Test</button> <button class="secondary" data-edit-endpoint="${esc(x.id)}">Edit</button>${x.managed_identity?.enabled?` <button class="secondary" data-rotate-endpoint="${esc(x.id)}">Rotate application keys</button>`:""} <button class="secondary danger" data-remove-endpoint="${esc(x.id)}">Remove</button></div></div>`;
   }).join("");
   list.querySelectorAll("[data-test-endpoint]").forEach(button=>button.onclick=()=>testResource(`/api/v1/endpoints/${button.dataset.testEndpoint}/test`,button,{}));
   list.querySelectorAll("[data-edit-endpoint]").forEach(button=>button.onclick=()=>editEndpoint(button.dataset.editEndpoint));
   list.querySelectorAll("[data-rotate-endpoint]").forEach(button=>button.onclick=async()=>{
     if(!confirm("Rotate every active Poundlock-managed key for this gateway?"))return;
     button.disabled=true;
-    try{const result=await api(`/api/v1/endpoints/${encodeURIComponent(button.dataset.rotateEndpoint)}/managed-identities/rotate`,{method:"POST",body:"{}"});toast(`Rotated ${result.rotated} client key${result.rotated===1?"":"s"}`)}catch(error){fail(error)}finally{button.disabled=false}
+    try{const result=await api(`/api/v1/endpoints/${encodeURIComponent(button.dataset.rotateEndpoint)}/managed-identities/rotate`,{method:"POST",body:"{}"});toast(`Rotated ${result.rotated} application key${result.rotated===1?"":"s"}`)}catch(error){fail(error)}finally{button.disabled=false}
   });
   list.querySelectorAll("[data-remove-endpoint]").forEach(button=>button.onclick=async()=>{
     const id=button.dataset.removeEndpoint,item=d.endpoints.find(x=>x.id===id);
-    if(!confirm(`Remove ${item.name}? Existing jobs keep their saved settings and history.`))return;
+    const keys=item.managed_identity?.enabled?" Its application keys are revoked, so every application using it loses access through it.":"";
+    if(!confirm(`Remove ${item.name}?${keys} Existing jobs keep their saved settings and history.`))return;
     button.disabled=true;
     try{await api(`/api/v1/endpoints/${encodeURIComponent(id)}`,{method:"DELETE"});if(editingEndpoint===id)resetEndpoint();await refresh();toast("Removed")}
     catch(error){fail(error);button.disabled=false}
@@ -57,15 +58,15 @@ function syncManagedEndpoint(){
   $("endpoint-managed-policy").hidden=!gateway||!enabled;
   for(const id of ["endpoint-managed-budget","endpoint-managed-budget-duration","endpoint-managed-duration","endpoint-managed-rpm","endpoint-managed-tpm"])$(id).disabled=!gateway||!enabled;
 }
-function resetEndpoint(){editingEndpoint=null;$("endpoint-form").reset();$("endpoint-save").textContent="Save endpoint";$("endpoint-cancel").hidden=true;$("endpoint-clear-row").hidden=true;$("endpoint-edit-note").hidden=true;syncManagedEndpoint()}
+function resetEndpoint(){editingEndpoint=null;$("endpoint-form").reset();$("endpoint-heading").textContent="Add a model server or gateway";$("endpoint-save").textContent="Save";$("endpoint-cancel").hidden=true;$("endpoint-clear-row").hidden=true;$("endpoint-edit-note").hidden=true;syncManagedEndpoint()}
 function editEndpoint(id){
   const item=state.data.endpoints.find(x=>x.id===id);if(!item)return;
-  resetEndpoint();editingEndpoint=id;
+  resetEndpoint();editingEndpoint=id;$("endpoint-heading").textContent=`Edit ${item.name}`;
   for(const [field,key] of [["name","name"],["kind","kind"],["url","base_url"],["public-url","public_url"]])$("endpoint-"+field).value=item[key]||"";
   for(const input of document.querySelectorAll('[name="endpoint-destination"]'))input.checked=input.value===item.data_destination;
   const managed=item.managed_identity||{};$("endpoint-connection-mode").value=managed.enabled?"managed_applications":"gateway_only";$("endpoint-managed-budget").value=managed.max_budget??"";$("endpoint-managed-budget-duration").value=managed.budget_duration??"";$("endpoint-managed-duration").value=managed.duration??"";$("endpoint-managed-rpm").value=managed.rpm_limit??"";$("endpoint-managed-tpm").value=managed.tpm_limit??"";syncManagedEndpoint();
   $("endpoint-save").textContent="Save changes";$("endpoint-cancel").hidden=false;$("endpoint-clear-row").hidden=!item.api_key_set;$("endpoint-edit-note").hidden=!item.api_key_set;
-  $("endpoint-name").focus();$("endpoint-form").scrollIntoView({block:"start",behavior:"smooth"});
+  $("endpoint-name").focus();$("endpoint-form").scrollIntoView({block:"start",behavior:motion()});
 }
 $("endpoint-form").addEventListener("submit",async event=>{
   event.preventDefault();const button=$("endpoint-save");button.disabled=true;
@@ -78,7 +79,7 @@ $("endpoint-form").addEventListener("submit",async event=>{
     if(destination)body.data_destination=destination;
     else if(!editingEndpoint){toast("Choose where this server sends prompts",true);button.disabled=false;return}
   }
-  try{await api("/api/v1/endpoints"+(editingEndpoint?"/"+encodeURIComponent(editingEndpoint):""),{method:editingEndpoint?"PATCH":"POST",body:JSON.stringify(body)});resetEndpoint();await refresh();toast("Endpoint saved")}
+  try{await api("/api/v1/endpoints"+(editingEndpoint?"/"+encodeURIComponent(editingEndpoint):""),{method:editingEndpoint?"PATCH":"POST",body:JSON.stringify(body)});resetEndpoint();await refresh();toast("Saved")}
   catch(error){fail(error)}finally{button.disabled=false}
 });
 $("endpoint-kind").onchange=syncManagedEndpoint;$("endpoint-connection-mode").onchange=syncManagedEndpoint;

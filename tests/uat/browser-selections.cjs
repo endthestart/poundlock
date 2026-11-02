@@ -7,7 +7,7 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
 (async()=>{
  const root=path.resolve(__dirname,'../../web');
  const nodes=['a','b'].map(id=>({id,name:'Machine '+id,platform:'linux',status:'online',wol_mac:'02:00:00:00:00:01',capabilities:{runtimes:[id+'-first',id+'-second']}}));
- const data={version:'0.1.0',nodes,endpoints:['a','b'].map(id=>({id,name:id,kind:'openai',base_url:'http://fixture.invalid'})),models:['a','b'].map(id=>({id,name:id,model_id:id,workload_class:'durable-coding-agent'})),projects:[],harnesses:[{id:'pi',name:'Pi',version:'fixture'}],jobs:[],api_tokens:[],occupancy:[],git_hosts:[]};
+ const data={version:'0.1.0',nodes,endpoints:['a','b'].map(id=>({id,name:id,kind:'openai',base_url:'http://fixture.invalid'})),models:['a','b'].map(id=>({id,name:id,model_id:id,workload_class:'durable-coding-agent',uses:['durable']})),projects:[],harnesses:[{id:'pi',name:'Pi',version:'fixture'}],jobs:[],api_tokens:[],token_permissions:[],occupancy:[],git_hosts:[]};
  let polls=0,wakeTarget;
  const browser=await chromium.launch({headless:true});try{
   const page=await browser.newPage(),errors=[];page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
@@ -21,7 +21,10 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
    await route.fulfill({body:await fs.readFile(path.join(root,name)),contentType:name.endsWith('.js')?'text/javascript':name.endsWith('.css')?'text/css':name.endsWith('.woff2')?'font/woff2':'text/html'});
   });
   await page.goto('https://selection-check.invalid');await page.locator('#token').fill('fixture');await page.locator('#token-form button').click();await page.locator('#application').waitFor({state:'visible'});
+  assert.equal(await page.locator('#job-model').inputValue(),'','with two models, none is chosen for the operator');
   await page.locator('#job-model').selectOption('b');
+  // Only models that can run jobs are offered.
+  assert.deepEqual(await page.locator('#job-model option').evaluateAll(options=>options.map(o=>o.value).filter(Boolean)),['a','b']);
   await page.locator('[data-tab="nodes"]').click();await page.locator('#wol-node').selectOption('b');await page.locator('#wake-settings summary').click();await page.locator('#wol-mac').fill('02:00:00:00:00:02');
   const start=polls;data.nodes.reverse();
   const deadline=Date.now()+12000;while(polls<start+2&&Date.now()<deadline)await page.waitForTimeout(100);

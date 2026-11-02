@@ -10,7 +10,7 @@ const {chromium}=require('playwright');
 const fs=require('node:fs/promises'),path=require('node:path'),assert=require('node:assert/strict');
 (async()=>{
  const root=path.resolve(__dirname,'../../web');
- const data={version:'0.1.0',nodes:[],endpoints:[],models:[],projects:[],harnesses:[],jobs:[],api_tokens:[],occupancy:[],git_hosts:[]};
+ const data={version:'0.1.0',nodes:[],endpoints:[],models:[],projects:[],harnesses:[],jobs:[],api_tokens:[],token_permissions:[],occupancy:[],git_hosts:[]};
  const screenshots=process.env.UAT_ARTIFACTS||process.env.POUNDLOCK_TEST_SCREENSHOTS||'/tmp/poundlock-theme-screenshots';
  await fs.mkdir(screenshots,{recursive:true});
  const browser=await chromium.launch({headless:true});
@@ -46,6 +46,9 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
    await page.locator('#application').waitFor({state:'visible'});
    assert.equal(await page.evaluate(()=>document.documentElement.dataset.theme),flavour,`${flavour}: choice must persist across reload`);
    assert.equal(await page.evaluate(()=>getComputedStyle(document.body).backgroundColor),CANVAS_RGB[flavour],`${flavour}: persisted theme must render the same colours`);
+   // The focus ring keeps at least 3:1 against the canvas.
+   const ring=await page.evaluate(()=>{const lum=c=>{const [r,g,b]=c.match(/\d+/g).slice(0,3).map(v=>{v/=255;return v<=0.03928?v/12.92:((v+0.055)/1.055)**2.4});return 0.2126*r+0.7152*g+0.0722*b};const b=document.querySelector('#refresh');b.focus({focusVisible:true});const [x,y]=[lum(getComputedStyle(b).outlineColor),lum(getComputedStyle(document.body).backgroundColor)].sort((p,q)=>q-p);return (x+0.05)/(y+0.05)});
+   assert.ok(ring>=3,`${flavour}: focus ring contrast ${ring.toFixed(2)} is under 3:1`);
    await page.screenshot({path:path.join(screenshots,`theme-${flavour}-desktop.png`),fullPage:true});
    await page.setViewportSize({width:390,height:844});
    assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false,`${flavour}: no horizontal overflow at 390px`);

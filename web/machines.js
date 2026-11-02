@@ -1,9 +1,9 @@
 function versionNote(node){
   const agent=node.capabilities?.agent_version;
   const current=state.data.version;
-  if(!agent)return "Agent version unknown";
-  if(agent===current)return `Agent v${agent}`;
-  return `Agent v${agent} · controller v${current}`;
+  if(!agent)return "Node version unknown";
+  if(agent===current)return `Node v${agent}`;
+  return `Node v${agent} · controller v${current}`;
 }
 
 // Node statuses: online = ok, maintenance = review, revoked (removed) = ended.
@@ -26,13 +26,16 @@ function renderMachines(){
   $("removed-node-list").innerHTML=removed.map(node=>`<div class="item">${rowIndicator("ended")}<strong>${esc(node.name)}</strong>${nodeStateBadge(node.status)}<p class="hint">A new installation requires a new enrollment token.</p></div>`).join("");
   const list=$("node-list"),nodes=d.nodes.filter(node=>node.status!=="revoked");
   if(!nodes.length){emptyState(list,"No machines enrolled.","Enroll one below to submit jobs and serve models.");return}
+  // An open dropdown or a field being typed in can't be rebuilt under the operator; the next poll catches up.
+  if(list.contains(document.activeElement)&&document.activeElement.matches("select,input,textarea"))return;
+  const place=keepPlace(list);
   const draftMemory=new Map([...list.querySelectorAll("[data-memory-form]")].filter(f=>f.dataset.dirty).map(f=>[f.dataset.memoryForm,f.elements.idle.value]));
   const expanded=new Set([...list.querySelectorAll('details[open][data-node-details]')].map(el=>el.dataset.nodeDetails));
   list.className="list";
   list.innerHTML=nodes.map(node=>{
     const runtimes=(node.capabilities?.runtimes||[]).join(", ")||"No runtimes advertised";
     const wol=node.wol_mac?`WOL ${node.wol_mac}`:"WOL not configured";
-    return `<div class="item">${rowIndicator(nodeStateBucket(node.status))}<strong>${esc(node.name)}</strong><div class="meta">${nodeStateBadge(node.status)}<span>${esc(node.platform)}</span><span>${esc(runtimes)}</span></div><div class="meta"><span>${node.last_seen_at?`Last seen ${new Date(node.last_seen_at).toLocaleString()}`:"Never connected"}</span><span>${esc(wol)}</span><span>${esc(versionNote(node))}</span></div><p class="hint">${esc(networkNote(node))}</p><div class="item-actions"><button type="button" class="secondary" data-pause-node="${esc(node.id)}">${node.status==="maintenance"?"Resume inference":"Pause inference"}</button><button type="button" class="secondary" data-remove-node="${esc(node.id)}">Remove machine</button></div></div>`;
+    return `<div class="item">${rowIndicator(nodeStateBucket(node.status))}<strong>${esc(node.name)}</strong><div class="meta">${nodeStateBadge(node.status)}<span>${esc(node.platform)}</span><span>${esc(runtimes)}</span></div><div class="meta"><span>${node.last_seen_at?`Last seen ${new Date(node.last_seen_at).toLocaleString()}`:"Never connected"}</span><span>${esc(wol)}</span><span>${esc(versionNote(node))}</span></div><p class="hint">${esc(networkNote(node))}</p><div class="item-actions"><button type="button" class="secondary" data-pause-node="${esc(node.id)}">${node.status==="maintenance"?"Resume inference":"Pause inference"}</button><button type="button" class="secondary danger" data-remove-node="${esc(node.id)}">Remove machine</button></div></div>`;
   }).join("");
   for(const node of nodes){
     const button=list.querySelector(`[data-remove-node="${CSS.escape(node.id)}"]`);
@@ -40,6 +43,7 @@ function renderMachines(){
   }
   for(const detail of list.querySelectorAll('[data-node-details]'))detail.open=expanded.has(detail.dataset.nodeDetails);
   for(const f of list.querySelectorAll('[data-memory-form]')){if(draftMemory.has(f.dataset.memoryForm)){f.elements.idle.value=draftMemory.get(f.dataset.memoryForm);f.dataset.dirty='true'}}
+  restorePlace(list,place);
 }
 
 $("node-list").addEventListener("click",async event=>{
@@ -51,11 +55,14 @@ $("node-list").addEventListener("click",async event=>{
   catch(error){fail(error);button.disabled=false}
 });
 
+// Tunnels, AirDrop and other system links say nothing about how a machine is reached.
+const SYSTEM_LINK=/^(lo|utun|awdl|llw|ap|anpi|gif|stf|bridge|vmenet|veth|virbr|docker)\d*$/;
+function systemLink(item){return item.kind==="virtual"||SYSTEM_LINK.test(item.name)}
 function networkNote(node){
   const network=node.capabilities?.network;
   if(!network?.mode)return "Connection details unavailable. Update the node to report them.";
   if(network.mode==="system"){
-    const available=(network.interfaces||[]).filter(item=>item.connected).map(item=>`${item.name}: ${(item.addresses||[]).join(", ")}${item.mac?` · MAC ${item.mac}`:""}`).join("; ");
+    const available=(network.interfaces||[]).filter(item=>item.connected&&!systemLink(item)).map(item=>`${item.name}: ${(item.addresses||[]).join(", ")}${item.mac?` · MAC ${item.mac}`:""}`).join("; ");
     return `System routing${available?` · Last reported connections: ${available}`:" · No connection details reported"}`;
   }
   const connection=network.status==="connected"?"connected":network.status==="disconnected"?"disconnected or without a usable IP address":"unavailable";
@@ -66,6 +73,13 @@ function networkNote(node){
 function reportBytes(value){
   return typeof value==='number'&&Number.isFinite(value)&&value>=0?`${(value/1073741824).toFixed(1)} GiB`:'Not reported';
 }
+// A server run from a container or a custom path isn't found on disk, though its runtime reports it.
+const SOFTWARE_RUNTIME={"Ollama":"ollama","oMLX":"omlx","llama.cpp server":"llamacpp","vLLM":"vllm","SGLang":"sglang"};
+function softwareStatus(item,inv){
+  const runtime=inv?.runtimes?.[SOFTWARE_RUNTIME[item.name]];
+  if(runtime&&!runtime.error)return 'Running, reported by the server';
+  return item.status==='detected'?'Detected':'Not detected in checked locations';
+}
 function reportRow(label,value){return `<dt>${esc(label)}</dt><dd>${esc(value??'Not reported')}</dd>`}
 function nodeDetails(node){
   const inv=node.capabilities?.inventory,interfaces=nodeInterfaces(node);
@@ -74,19 +88,19 @@ function nodeDetails(node){
   const gpus=Array.isArray(inv?.gpus)?inv.gpus:[],software=Array.isArray(inv?.software)?inv.software:[];
   const gpuSummary=gpus.map(gpu=>gpu.name||`${gpu.vendor||'GPU'} ${gpu.device_id||''}`).join(', ');
   return `${node.capabilities?.controller_transport==='insecure_http'?'<p class="hint">Connects over plain HTTP (allow_insecure_http in node.toml): its credential and the controller\'s instructions cross the network unencrypted. Put HTTPS in front of the controller and remove the setting.</p>':''}
-    <p class="hint">${esc(models.length?`${models.length} model profile${models.length===1?'':'s'} configured`:'No model profile configured')}</p>
-    ${missingRuntimes.length?`<p class="hint">${esc(missingRuntimes.map(model=>model.name).join(', '))}: the configured runtime is not reported by this machine. Update the model profile on <a href="#models">Models</a> or restore its runtime in the node configuration.</p>`:''}
+    <p class="hint">${esc(models.length?`${models.length} model${models.length===1?'':'s'} configured`:'No model configured')}</p>
+    ${missingRuntimes.length?`<p class="hint">${esc(missingRuntimes.map(model=>model.name).join(', '))}: the configured runtime is not reported by this machine. Update the model on <a href="#models">Models</a> or restore its runtime in the node configuration.</p>`:''}
     ${modelMemoryPanel(node,models)}
     <button type="button" class="secondary" data-connect-node="${esc(node.id)}">Connect a model server</button>
     <details data-node-details="${esc(node.id)}-setup"><summary>Model server setup help</summary>${installationHelp(node)}</details>
     <details data-node-details="${esc(node.id)}-inventory"><summary>Technical details${gpuSummary?` · ${esc(gpuSummary)}`:''}</summary>
     ${inv?`<p class="hint">Collected ${esc(new Date(inv.collected_at).toLocaleString())}. Last reported values remain available while offline.</p>
       <dl class="node-facts">${reportRow('Operating system',[inv.os?.name,inv.os?.version,inv.os?.arch].filter(Boolean).join(' '))}${reportRow('Kernel',inv.os?.kernel)}${inv.os?.glibc?reportRow('glibc',inv.os.glibc):''}${reportRow('Computer',[inv.os?.machine_vendor,inv.os?.machine_model].filter(Boolean).join(' ')||null)}${reportRow('Processor',inv.cpu?.model)}${reportRow('Logical cores available to node',inv.cpu?.logical_cores)}${reportRow('Memory',reportBytes(inv.memory?.total_bytes))}${inv.memory?.available_bytes!=null?reportRow('Memory available at collection',reportBytes(inv.memory.available_bytes)):''}${reportRow('Node filesystem space available',reportBytes(inv.storage?.available_bytes))}${reportRow('Node filesystem size',reportBytes(inv.storage?.total_bytes))}</dl>
-      <h4>Graphics</h4>${gpus.length?gpus.map(gpu=>`<dl class="node-facts">${reportRow('GPU',gpu.name||[gpu.vendor,gpu.device_id].filter(Boolean).join(' '))}${reportRow('GPU memory',gpu.vram||reportBytes(gpu.vram_bytes))}${gpu.driver?reportRow('Driver',[gpu.driver,gpu.driver_version].filter(Boolean).join(' ')):''}${gpu.pci_address?reportRow('PCI address',gpu.pci_address):''}${gpu.metal?reportRow('Metal',gpu.metal):''}</dl>`).join(''):'<p class="hint">GPU details were not reported.</p>'}
-      <h4>Software</h4><dl class="node-facts">${software.map(item=>reportRow(item.name,item.status==='detected'?'Detected':'Not detected in checked locations')).join('')}</dl>
+      <h4>Graphics</h4>${gpus.length?gpus.map(gpu=>`<dl class="node-facts">${reportRow('GPU',gpu.name||[gpu.vendor,gpu.device_id].filter(Boolean).join(' '))}${reportRow('GPU memory',typeof gpu.vram_bytes==='number'?reportBytes(gpu.vram_bytes):gpu.vram)}${gpu.driver?reportRow('Driver',[gpu.driver,gpu.driver_version].filter(Boolean).join(' ')):''}${gpu.pci_address?reportRow('PCI address',gpu.pci_address):''}${gpu.metal?reportRow('Metal',gpu.metal):''}</dl>`).join(''):'<p class="hint">GPU details were not reported.</p>'}
+      <h4>Software</h4><dl class="node-facts">${software.map(item=>reportRow(item.name,softwareStatus(item,inv))).join('')}</dl>
       <p class="hint">Software detection does not confirm that a server is running. Custom installations and containers may not be detected.</p>
       ${runtimeIdentityRows(inv,models)}`:`<p class="hint">This node has not reported hardware and software details. ${node.platform==='linux'?'Update it using the <a href="#linux-guide">Linux installation guide</a>.':'Update the node binary and restart its service.'} Keep the existing configuration and enrollment.</p>`}
-      <h4>Network interfaces</h4>${interfaces.length?interfaces.map(item=>`<dl class="node-facts">${reportRow('Interface',[item.name,item.kind,item.connected?'connected':'disconnected'].filter(Boolean).join(' · '))}${reportRow('MAC address',item.mac)}${reportRow('IP addresses',(item.addresses||[]).join(', ')||null)}${item.broadcasts?.length?reportRow('Broadcast addresses',item.broadcasts.join(', ')):''}${item.driver?reportRow('Driver',item.driver):''}${item.mtu?reportRow('MTU',item.mtu):''}</dl>`).join(''):'<p class="hint">No interface details reported.</p>'}
+      <h4>Network interfaces</h4>${interfaces.length?interfaceRows(interfaces.filter(item=>!systemLink(item)))+(interfaces.some(systemLink)?`<details><summary>System and virtual links (${interfaces.filter(systemLink).length})</summary>${interfaceRows(interfaces.filter(systemLink))}</details>`:''):'<p class="hint">No interface details reported.</p>'}
       <button type="button" class="secondary" data-download-node="${esc(node.id)}">Download technical report</button>
     </details>`;
 }
@@ -100,7 +114,7 @@ function runtimeIdentityRows(inv,models){
     // The label is typed by an operator; the machine reports what it loaded.
     const labelled=(models||[]).filter(model=>model.runtime_profile===name&&model.model_label);
     const mismatch=info?.model&&labelled.length&&!labelled.some(model=>model.model_label===info.model)
-      ? ` — labelled ${labelled.map(model=>esc(model.model_label)).join(', ')}` : '';
+      ? ` — labelled ${labelled.map(model=>esc(model.model_label)).join(', ')}; edit those models on Models to match` : '';
     return reportRow(name,[application||'Reported, no application details',served].filter(Boolean).join(' · ')+mismatch);
   }).join('')}</dl><p class="hint">Reported by each runtime's own identity command, not managed by Poundlock. A label that differs from the served model is shown so you can correct one of them.</p>`;
 }
@@ -138,7 +152,7 @@ function installationHelp(node){
       <li>Start the server, load a model, and enable its OpenAI-compatible API.</li>
       <li>Choose a server address the Poundlock controller can reach. A localhost address refers to the controller itself. Use the server’s authentication and network-access instructions.</li>
       <li>Choose <strong>Connect a model server</strong>, save its API URL ending in <code>/v1</code>, and test the endpoint.</li>
-      <li>Add a model on Models with this machine, its runtime and the server model ID. Poundlock suggests the model name clients send. Then use <strong>Generate</strong> to test inference.</li>
+      <li>Add a model on Models with this machine, its runtime and the server model ID. Poundlock suggests the model name clients send. Then use <strong>Test inference</strong> on its card.</li>
       <li>For unattended use, follow the server’s startup instructions and check it after reboot or logout. Test wake from sleep if needed.</li>
     </ol><p class="hint">The default always-ready runtime keeps this machine awake during work and uses the server you started. Starting or stopping model software requires explicit local runtime configuration.</p>`;
 }
@@ -173,11 +187,32 @@ $("enroll-network").addEventListener("change",()=>{
 });
 
 function installCommand(platform,sha256){
+  // A launchd agent keeps the node running: started by hand, it stayed down after a
+  // reboot or its own self-update, which relies on KeepAlive (UX audit, 30 Oct).
   if(platform==="macos"){
-    return `# In the folder with node.toml: enroll once. Paste the token when asked; it is not shown.
-~/.local/share/poundlock/bin/poundlock node-enroll --config ./node.toml --credential-file ~/.local/share/poundlock/node-credential.json
-# Then start the node.
-~/.local/share/poundlock/bin/poundlock node --config ./node.toml --credential-file ~/.local/share/poundlock/node-credential.json --data-dir ~/.local/share/poundlock`;
+    return `# In the folder with node.toml.
+dir="$HOME/.local/share/poundlock"; agent="$HOME/Library/LaunchAgents/com.poundlock.node.plist"
+mkdir -p "$dir" "$HOME/Library/LaunchAgents" "$HOME/Library/Logs" && chmod 700 "$dir" && install -m 600 ./node.toml "$dir/node.toml"
+# Enroll once. Paste the token when asked; it is not shown.
+"$dir/bin/poundlock" node-enroll --config "$dir/node.toml" --credential-file "$dir/node-credential.json"
+# Install the node as a launchd agent, so it comes back after a reboot or an update.
+cat > "$agent" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>Label</key><string>com.poundlock.node</string>
+  <key>ProgramArguments</key><array>
+    <string>$dir/bin/poundlock</string><string>node</string>
+    <string>--config</string><string>$dir/node.toml</string>
+    <string>--credential-file</string><string>$dir/node-credential.json</string>
+    <string>--data-dir</string><string>$dir</string>
+  </array>
+  <key>KeepAlive</key><true/><key>RunAtLoad</key><true/>
+  <key>StandardOutPath</key><string>$HOME/Library/Logs/poundlock-node.log</string>
+  <key>StandardErrorPath</key><string>$HOME/Library/Logs/poundlock-node.log</string>
+</dict></plist>
+PLIST
+launchctl bootout "gui/$(id -u)/com.poundlock.node" 2>/dev/null; launchctl bootstrap "gui/$(id -u)" "$agent"`;
   }
   return `# Run in the folder containing the three downloaded files.
 sudo bash ./poundlock-node.sh install --binary ./poundlock-linux-${$("enroll-arch").value} --sha256 ${sha256} --config ./node.toml
@@ -277,7 +312,7 @@ function enrollmentPlatform(){
   $("download-installer").hidden=!linux;
   $("enroll-download-title").textContent=linux?"2. Download to the Linux computer":"2. Download to the Mac";
   $("enroll-download-hint").textContent=linux?"Save all three files together in any folder you own, such as ~/Downloads/poundlock. If downloading on another computer, copy them to Linux first. The installer takes care of permanent locations; keep the installer for later maintenance.":"Save node.toml in your working folder and place the native binary at ~/.local/share/poundlock/bin/poundlock on the Mac. Make the binary executable.";
-  $("enroll-install-hint").textContent=linux?"Open a terminal in that folder (for example, cd ~/Downloads/poundlock). Create a token when ready, then run the command shown below. The installer prompts for your token and installs the service.":"Create a token, then run the displayed commands from the folder containing node.toml. Enrollment asks for the token without showing it, so it stays out of your shell history.";
+  $("enroll-install-hint").textContent=linux?"Open a terminal in that folder (for example, cd ~/Downloads/poundlock). Create a token when ready, then run the command shown below. The installer prompts for your token and installs the service.":"Create a token, then run the displayed commands from the folder containing node.toml. They put it in place, enroll (the token is asked for without showing it, so it stays out of your shell history), and install a launchd agent so the node comes back after a reboot or an update. Guide: docs/guide/machines.md, macOS.";
   clearReveal();
 }
 $("enroll-platform").addEventListener("change",enrollmentPlatform);
@@ -296,10 +331,12 @@ function loadWakeSettings(){
   if(node?.wol_mac){$("wol-mac").value=node.wol_mac;$("wol-broadcast").value=node.wol_broadcast||"255.255.255.255:9"}
   $("test-wake").disabled=!node?.wol_mac;
   $("save-wake").disabled=!node;
+  $("wake-panel").hidden=!node;
   $("wake-settings-note").textContent=node?.wol_mac?`Saved wake address: ${node.wol_mac}. Test from sleep; waits up to 60 seconds for the node.`:node?'Choose a wake interface and save its settings first.':'Enroll a machine to configure wake.';
   if(changed)$("wake-settings").open=!!node&&!node.wol_mac;
   $("wake-result").textContent="";
 }
+function interfaceRows(items){return items.map(item=>`<dl class="node-facts">${reportRow('Interface',[item.name,item.kind,item.connected?'connected':'disconnected'].filter(Boolean).join(' · '))}${reportRow('MAC address',item.mac)}${reportRow('IP addresses',(item.addresses||[]).join(', ')||null)}${item.broadcasts?.length?reportRow('Broadcast addresses',item.broadcasts.join(', ')):''}${item.driver?reportRow('Driver',item.driver):''}${item.mtu?reportRow('MTU',item.mtu):''}</dl>`).join('')}
 function nodeInterfaces(node){
   const network=node?.capabilities?.network;
   return Array.isArray(network?.interfaces)?network.interfaces:network?.interface?[{name:network.interface,mac:network.mac,addresses:network.addresses,connected:network.status==='connected'}]:[];
@@ -328,7 +365,7 @@ async function wakeAction(test){
     if(test){
       const result=await api(`/api/v1/nodes/${encodeURIComponent(id)}/wake-test`,{method:"POST",body:JSON.stringify({timeout_seconds:60})});
       if(!live(snapshot))throw staleError();
-      resultText.textContent=result.was_online?"Machine was already online; fresh heartbeat confirmed. Test from sleep to check wake support.":result.awake?"Machine responded after the wake request. Use Test on Models to check inference.":"Wake test finished";
+      resultText.textContent=result.was_online?"Machine was already online; fresh heartbeat confirmed. Test from sleep to check wake support.":result.awake?"Machine responded after the wake request. Use Test inference on Models to check it answers.":"Wake test finished";
     }else{
       await api(`/api/v1/nodes/${encodeURIComponent(id)}/wol`,{method:"PUT",body:JSON.stringify({mac:$("wol-mac").value,broadcast:$("wol-broadcast").value})});
       if(!live(snapshot))throw staleError();
@@ -344,7 +381,8 @@ async function wakeAction(test){
   }
 }
 
-if(state.token)refresh().catch(()=>{});
+// A saved token that no longer works is dropped, with why, rather than left to fail again.
+if(state.token)refresh().catch(error=>{if(error.status!==401)return;state.token="";forgetToken();toast("The saved token no longer works. Paste a current one.",true)});
 
 
 function modelMemoryPanel(node,models){
@@ -353,11 +391,13 @@ function modelMemoryPanel(node,models){
   const managed=models.filter(model=>model.runtime_profile==='ollama');
   const rows=memory?.models||[];
   const observed=node.status==='online'&&memory?.status==='observed';
+  // Poundlock manages model memory for Ollama only; other runtimes keep their own lifecycle.
+  if(!supported&&!rows.length)return '';
   return `<details data-node-details="${esc(node.id)}-memory"><summary>Model memory</summary>
     ${supported?`<p class="hint">Ollama models stay available during active work. Choose when to release memory after work finishes.</p>
     ${managed.map(model=>`<form data-memory-form="${esc(model.id)}"><label>${esc(model.name)} — unload<select name="idle"><option value="0"${!(model.idle_seconds>0)?' selected':''}>After work finishes</option><option value="60"${model.idle_seconds===60?' selected':''}>After 1 minute</option><option value="300"${model.idle_seconds===300?' selected':''}>After 5 minutes</option><option value="1200"${model.idle_seconds===1200?' selected':''}>After 20 minutes</option>${model.idle_seconds>0&&![60,300,1200].includes(model.idle_seconds)?`<option value="${esc(String(model.idle_seconds))}" selected>After ${esc(String(model.idle_seconds))} seconds</option>`:''}</select></label><button type="submit" class="secondary">Save memory setting</button></form>`).join('')}
-    ${!managed.length?'<p>No managed Ollama profile configured. Choose Ollama in the Models drawer when connecting your model.</p>':''}`:'<p>Ollama is off on this machine. To manage it here, add <code>[ollama]</code> with <code>enabled = true</code> to its node.toml and restart the node. Other runtimes use their configured lifecycle manager.</p>'}
-    <p class="hint">${observed?(rows.some(m=>m.loaded)?'Models currently loaded:':'No models loaded in Ollama.'):'Current model memory is not confirmed. Last reported values follow.'}${memory?.checked_at?` Checked ${esc(new Date(memory.checked_at).toLocaleString())}.`:''}</p>
+    ${!managed.length?'<p>No managed Ollama model configured. Choose Ollama in the Models drawer when connecting your model.</p>':''}`:'<p>Ollama is off on this machine. To manage it here, add <code>[ollama]</code> with <code>enabled = true</code> to its node.toml and restart the node. Other runtimes use their configured lifecycle manager.</p>'}
+    <p class="hint">${observed?(rows.some(m=>m.loaded)?'Models currently loaded:':'No models loaded in Ollama.'):rows.length?'Current model memory is not confirmed. Last reported values follow.':'Model memory has not been reported yet.'}${memory?.checked_at?` Checked ${esc(new Date(memory.checked_at).toLocaleString())}.`:''}</p>
     ${rows.map(m=>`<p><strong>${esc(m.model)}</strong> · ${m.loaded?'Loaded':'Not loaded'}${m.loaded?` · ${esc(reportBytes(m.gpu_bytes))} GPU memory`:''} · ${m.managed?(m.active_leases?'Work in progress':'Idle'):'Loaded outside Poundlock'}${m.error?`<br><span role="status">Cleanup needs attention: ${esc(m.error)}</span>`:''}</p>`).join('')}
     ${memory?.status==='unavailable'?'<p role="status">Ollama is unavailable. Check that its service is running on this machine.</p>':''}
     <p class="hint">Saved changes apply to the next request or job. Models loaded directly by another application remain under that application's control.</p>
