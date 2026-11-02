@@ -3,8 +3,6 @@
 **/*.rs.bk
 
 # Native debug and build leftovers (never commit these)
-/debug/
-/build/
 debug/
 build/
 
@@ -12,22 +10,20 @@ build/
 .env
 .env.*
 !.env.example
-/tests/uat/.env
 /data/
 *.sqlite3
+# The node's default --config and --credential-file paths
 /node-credential.json
 /node.toml
-/config/local/
-/projects/*
-!/projects/.gitkeep
 
 # Local reference checkouts
 /source/
 
-# IDE / OS
+# IDE, OS and agent tools
 .DS_Store
 .idea/
 .vscode/
+.claude/
 *.swp
 *~
 

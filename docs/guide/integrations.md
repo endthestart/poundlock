@@ -201,6 +201,11 @@ characters of reasoning text (characters, not tokens), and a level is verified
 when thinking is on and text comes back, or off and none does. Profiles on other
 runtimes are verified only from a reported token count, as before.
 
+An adaptive model may not think about a short probe at a low level. A level the
+upstream accepted counts as verified when a higher level reasoned on the same route,
+because the route carries the setting. Once a profile has a list of verified levels,
+Poundlock refuses every other level for all clients.
+
 Requests are checked against the options Poundlock understands, and an unknown
 key is refused by name (`unsupported inference option: <key>`). For a profile
 whose `data_destination` is `operator_network`, the local-runtime controls
@@ -213,13 +218,16 @@ them, so they are refused for any other destination.
 In Models, the profile editor’s Advanced section lets an operator paste a JSON block of
 measured capability evidence for a profile. Make it from
 [Poundlock Toolkit](https://github.com/endthestart/poundlock-toolkit) 0.5.0 or later
-results:
+results, in a Poundlock checkout:
 
 ```sh
 poundlock-toolkit recommend --format json run.json [more runs] --output summary.json
-python3 -m pip install 'jsonschema>=4.23,<5'
-python3 scripts/toolkit-capabilities.py summary.json > block.json
+python3 -m venv .venv && .venv/bin/pip install 'jsonschema>=4.23,<5'
+.venv/bin/python scripts/toolkit-capabilities.py summary.json > block.json
 ```
+
+With uv, `uv run --with 'jsonschema>=4.23,<5' scripts/toolkit-capabilities.py
+summary.json > block.json` does the last two steps in one.
 
 The script reads Toolkit's versioned summary
 (`urn:poundlock-toolkit:recommendation:1`) and does not import Toolkit. It refuses a

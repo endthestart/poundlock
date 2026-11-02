@@ -1,6 +1,6 @@
 # Submit a durable job
 
-Open the controller, connect with an operator token or an application token with
+Open the controller, connect with the administrator token or an application token with
 `jobs:read` and `jobs:submit`, and use **Jobs**. Add `jobs:cancel` when cancellation
 is needed. A token sees, cancels and downloads only the jobs it submitted; jobs
 still share one queue and the same runners, so this is not tenant isolation.
@@ -24,7 +24,7 @@ Describe the requested work, select a model, and choose starting files:
 - **Start with an empty workspace** requires no repository and can produce new
   files or a text answer.
 - **Advanced: server repository** uses repositories already registered on the
-  controller. This option requires an operator token.
+  controller. This option requires the administrator token.
 
 Snapshots support up to 10,000 files and 50 MiB of decoded content. The complete
 snapshot is encrypted in the controller database until the job ends: completing,

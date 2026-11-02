@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: Poundlock application API
-  version: 0.3.0
+  version: 0.4.0
   x-poundlock-api-major: 1
   x-poundlock-contract-revision: 5
   description: >-
@@ -56,6 +56,7 @@ paths:
   /api/v1/capabilities:
     get:
       summary: Read the supported contract revision and optional features
+      description: Any active API token may read this, whatever its permissions.
       responses:
         "200":
           description: Capabilities
@@ -233,7 +234,7 @@ paths:
         "200": { description: Durable job options }
   /api/v1/jobs:
     get:
-      summary: List shared durable jobs
+      summary: List jobs, newest first, as summaries without their policy, result or error (a token sees only its own jobs)
       responses:
         "200": { description: Jobs }
     post:
@@ -248,6 +249,36 @@ paths:
         "403": { $ref: "#/components/responses/ExternalPermissionRequired" }
         "409": { description: Idempotency key was reused for different input }
         "429": { $ref: "#/components/responses/TooManyActiveJobs" }
+  /api/v1/jobs/{id}:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      summary: A job with its policy, result and error (a token reads only its own jobs)
+      responses:
+        "200": { description: Job }
+        "404": { description: No such job, or not this token's }
+  /api/v1/jobs/{id}/events:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    get:
+      summary: A job's events, oldest first
+      responses:
+        "200": { description: Events }
+        "404": { description: No such job, or not this token's }
+  /api/v1/jobs/{id}/patches/{index}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string } }
+      - { name: index, in: path, required: true, schema: { type: integer, minimum: 0 } }
+    get:
+      summary: Download one of a finished job's patches, as text
+      responses:
+        "200": { description: Patch }
+        "404": { description: No such job, patch, or not this token's }
+  /api/v1/jobs/{id}/cancel:
+    parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+    post:
+      summary: Ask a job to stop; its uploaded source is deleted, and its prompt, results and events are kept
+      responses:
+        "200": { description: Cancellation requested }
+        "404": { description: No such job, or not this token's }
 components:
   parameters:
     Wait:
@@ -324,6 +355,23 @@ components:
         contract_revision: { type: integer, minimum: 1 }
         product_version: { type: string }
         features: { type: array, items: { type: string } }
+        caller_permissions:
+          type: array
+          description: >-
+            Feature caller_permissions. The permissions of the token that made
+            this request.
+          items: { type: string }
+        token_permissions:
+          type: array
+          description: >-
+            Feature permission_labels. Every API token permission with the
+            label to show for it.
+          items:
+            type: object
+            required: [code, label]
+            properties:
+              code: { type: string }
+              label: { type: string }
         verifier:
           type: object
           properties:
@@ -413,6 +461,18 @@ components:
             pasted from the Toolkit; each carries `age_days`, `stale` and
             `settings_match`, computed fresh on every read and never stored.
             An empty array means unknown, not incapable.
+          properties:
+            uses:
+              type: array
+              items: { enum: [completion, durable, interactive] }
+              description: What the profile serves.
+            workload_class:
+              deprecated: true
+              enum: [interactive-coding, durable-coding-agent, fast-code-completion]
+              description: >-
+                The single-class view of `uses`, for clients that predate it. Read
+                `uses` instead. The next contract revision stops accepting
+                `workload_class` when a profile is created or changed.
     Error:
       type: object
       required: [error]

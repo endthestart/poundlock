@@ -10,10 +10,13 @@ exists and what it advertises, not that this account may use it. A
 **configured route** means LiteLLM routes it with a credential. A **published
 profile** means Poundlock offers it to applications. Discovery reads LiteLLM's
 `/model/info` with the endpoint's administrative key and the public OpenRouter
-catalog. It publishes only configured routes. A route that does not exist yet
-is created in LiteLLM's own Admin UI (ADR 0001: Poundlock does not write routes
-or credentials). Testing a route uses LiteLLM's `/health`, so the
-administrative key never carries inference.
+catalog. It publishes only configured routes. A catalog listing becomes a
+configured route in one of two ways: the operator adds it in LiteLLM's own Admin
+UI, or confirms Poundlock's add card, which creates the route with the catalog's
+prices, context and maximum output and an existing named credential, then
+publishes it (ADR 0001, amended 27 Oct 2026). Poundlock never edits or deletes a
+route and never writes credentials. Testing a route uses LiteLLM's `/health`, so
+the administrative key never carries inference.
 
 Reasoning is chosen per request by the client, and Poundlock never rewrites it.
 Precedence, most specific first:

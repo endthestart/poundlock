@@ -2,7 +2,7 @@
 
 **One OpenAI-compatible endpoint for the model servers on your own machines.**
 
-Status: 0.3.0, the first public release. The server runs on Linux x86_64 with
+Status: 0.4.0. The server runs on Linux x86_64 with
 Docker. A small project with one maintainer; see [support](#status-and-support).
 
 Poundlock sits in front of the llama.cpp, Ollama or vLLM servers you already run.
@@ -20,7 +20,7 @@ coding jobs and hand back a patch with independently checked results.
   chat app's stream is held open until the model is free.
   [How it works](docs/guide/integrations.md#when-a-model-is-busy).
 - **Explicit external access.** Keep local inference separate from permission to
-  send data or spend through external profiles, with optional LiteLLM budgets.
+  send data or spend through external models, with optional LiteLLM budgets.
 - **Jobs that survive disconnection.** Follow progress in the browser or API,
   cancel work, and download patches when it finishes.
 - **Independent checks.** Run verification commands, protect selected files,
@@ -42,7 +42,7 @@ release, and how to upgrade, is in [CHANGELOG.md](CHANGELOG.md).
 
 ## How it compares
 
-Poundlock is for a household or small team that owns its GPUs and wants one
+Poundlock is for a home lab or small team that owns its GPUs and wants one
 endpoint, per-application access and machines that sleep until needed. Other
 projects do parts of this better:
 
@@ -96,14 +96,17 @@ You also need a working OpenAI-compatible model server, such as llama.cpp's
 
 For a remote server, use a private connection or HTTPS and configure its listening
 address. See [installation and operations](docs/guide/operations.md).
+To script the same administration from a terminal, use the
+[admin CLI](docs/guide/admin-cli.md) or the HTTP API it calls.
 
 ## First useful job
 
 In **Connections**, add your model server’s API URL (usually ending in `/v1`). In
 **Models**, choose **Add model**, fetch its model IDs and create a profile using an exact ID and the context limit configured
-in that server. Pi coding tasks need at least 8192 context tokens. Use **Generate**
-to test an actual answer. Identity only lists models. Generate waits up to
-90 seconds; the first request after idle can be slower than a later retry.
+in that server. Pi coding tasks need at least 8192 context tokens. Use **Test
+inference** to get an actual answer; **Check listing** only lists the server's models.
+Test inference waits up to 90 seconds; the first request after idle can be slower
+than a later retry.
 
 In **Jobs**, choose that profile, upload a folder or start with an empty workspace,
 and describe the change. Add a verification command when you want a checked
@@ -125,8 +128,8 @@ inference requests. Configure your editor’s OpenAI-compatible provider with:
 | Model | A profile name from Models |
 
 Use a fast-completion profile for autocomplete and a coding profile for chat.
-Select **Allow prompts and files to leave the controlled network** only for an
-application that may use profiles declared External. Managed LiteLLM access also
+Select **Send prompts and files to external services** only for an application
+that may use models declared external. Managed LiteLLM access also
 requires an operator-set spending limit and reset period.
 Keep the administrator token out of editor settings. The optional native ACP
 adapter is described in [integrations](docs/guide/integrations.md).
@@ -139,8 +142,8 @@ server setup links. Select the connection you want the node to use, and configur
 its wake-capable interface separately if needed.
 
 For Ollama, select **Ollama — managed loading and unloading** in the model profile.
-Set **Unload after idle seconds** to `0` to unload immediately after work—useful
-on a shared gaming GPU. Poundlock leaves externally loaded models alone.
+Set **Keep loaded after the last request, in seconds** to `0` to unload
+immediately after work—useful on a shared gaming GPU. Poundlock leaves externally loaded models alone.
 
 Wake-on-LAN also requires support and configuration in the NIC, firmware and OS.
 See [machine setup](docs/guide/machines.md), including macOS and runtime limits.
@@ -194,7 +197,8 @@ Clone the source repository before running these commands:
 cargo fmt --all --check
 cargo clippy --all-targets --locked -- -D warnings
 cargo test --all --locked
-POUNDLOCK_IMAGE=poundlock:dev docker compose -f compose.yaml -f compose.build.yaml up --build -d
+POUNDLOCK_DOCKER_GID=$(stat -c '%g' /var/run/docker.sock) POUNDLOCK_IMAGE=poundlock:dev \
+  docker compose -f compose.yaml -f compose.build.yaml up --build -d
 ```
 
 [Contributing](CONTRIBUTING.md) explains the checks, the end-to-end suite and

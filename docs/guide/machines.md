@@ -9,7 +9,8 @@ server. You can enroll first and choose inference software afterward.
 
 Use **Machines → Linux installation guide**. The page generates the configuration,
 provides the matching binary and installer, and shows complete commands. Download
-all files into any folder you own on the target machine.
+all files into any folder you own on the target machine. The
+[Linux node guide](../linux-node.md) covers requirements, recovery and removal.
 
 The installer uses sudo to create a systemd service and a narrow polkit rule.
 The node runs as its own system account, `poundlock-node`, with no login and no
@@ -32,6 +33,10 @@ are included in the guide. A new enrollment token cannot take over a name that
 is still online or paused; wait until the machine misses heartbeats or remove it
 first. Reinstall after a wipe reuses the same name once the old registration is
 offline or removed.
+
+A node in a container has no terminal for `node-enroll`. Set
+`POUNDLOCK_ENROLLMENT_TOKEN` in its environment instead; `poundlock node` reads it
+only on the first start, before a credential file exists.
 
 ## Controller address
 
@@ -103,7 +108,10 @@ token) with `endpoint_id` and `model_id`, and optionally `node_id`,
 sends no inference request. Each value has a `source`, and `problems` lists what
 would stop the model working: a name already in use, a model the runtime cannot
 serve, a context below the 8,192 agent jobs need, or a paused machine. Publishing
-a gateway route from Discover uses the same defaults.
+a gateway route from Discover uses the same defaults, and so does creating a model
+with `POST /api/v1/model-profiles`: any of these values the request leaves out is
+filled in from the draft, so [`poundlock model-add`](admin-cli.md#model-add) and
+scripts get what the console shows. Only a context that nothing reports has to be given.
 
 ## Ollama loading and unloading
 
@@ -144,6 +152,9 @@ wake packets; it does not change driver, firmware or network-manager settings.
 
 ## macOS
 
+Machines → Add a machine → macOS shows these steps as one command to run from the folder
+with `node.toml`, the launchd agent included. By hand:
+
 Download and verify the matching native archive, then extract it in a temporary
 folder. From that folder:
 
@@ -174,7 +185,7 @@ mkdir -p "$HOME/Library/LaunchAgents"
 launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.poundlock.node.plist"
 ```
 
-Confirm Online in Machines and test Generate. Enable “Wake for network access”
+Confirm Online in Machines and use Test inference. Enable “Wake for network access”
 where supported. For removal, unload the agent with `launchctl bootout` using the
 same domain and plist path, remove the machine in Machines, then delete the plist
 and its `~/.local/share/poundlock` directory after preserving any needed settings.

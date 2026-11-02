@@ -14,6 +14,17 @@ Use HTTPS or a trusted private network for credentials and node updates. The
 operator configures TLS/VPN and firewall rules; Poundlock does not configure them.
 A node configured for one network interface stays offline if that interface fails.
 
+## Administration from a terminal
+
+Everything the console does goes through the controller's admin API, so it can be
+scripted. The `poundlock` binary has commands for the common steps: adding
+endpoints, models, projects and machines, and submitting and following jobs. See
+[Admin CLI](admin-cli.md). In this installation:
+
+```sh
+docker compose exec controller poundlock status --token-file /data/admin-token
+```
+
 ## Workers and capacity
 
 Only the supervisor has access to the Docker socket. A read-only socket mount
@@ -56,6 +67,16 @@ The supervisor uses a bounded `/work` tmpfs sized by `POUNDLOCK_WORK_SIZE`
 (default 2g). That setting does not change per-job workspace volumes, which
 remain 2 GiB, or the worker CPU/memory ceilings.
 
+Less common settings:
+
+| Setting | Meaning |
+|---|---|
+| `POUNDLOCK_CAPACITY_DEFAULT_WAIT_SECONDS` | How long a model request that sends no `Poundlock-Wait` header waits in line for a busy exclusive model; default and maximum `110`. `0` answers 409 at once. |
+| `POUNDLOCK_NODE_OFFLINE_SECONDS` | Seconds after a node's last heartbeat before it counts as offline; default `15`. |
+| `POUNDLOCK_DOCKER_SOCKET` | The Docker socket the supervisor uses; default `/var/run/docker.sock`, where Compose mounts the host's socket. Change it only for a supervisor run outside Compose. |
+
+Set the first two in `.env` and run `docker compose up -d`.
+
 ## Wake-on-LAN
 
 On a Linux controller host, enable the private wake relay:
@@ -67,7 +88,7 @@ docker compose -f compose.yaml -f compose.wake.yaml up -d
 Use both files for subsequent Compose operations on this installation. The relay
 uses host networking to send LAN broadcasts and accepts requests only through a
 private Unix socket shared with the controller. It exposes no TCP API.
-Configure the machine's wake interface and test real sleep followed by Generate.
+Configure the machine's wake interface and test real sleep followed by Test inference.
 A heartbeat alone does not establish working inference. Avoid SSH probes during a
 wake test because some machines wake on connection attempts.
 
@@ -87,7 +108,9 @@ Read the initial administrator token with:
 docker compose exec controller cat /data/admin-token
 ```
 
-Use Access to create and revoke named application tokens. Tokens are shown once.
+Use Access to create, edit and revoke named application tokens. Tokens are shown
+once. Editing a token changes its name and permissions and keeps its secret and
+jobs; a removed permission stops working on the token's next request.
 Revoking a token also stops its inference streams and cancels the jobs it
 submitted that have not finished. An application token cannot recover the
 administrator token. Sign out in the
@@ -103,13 +126,22 @@ replace one computer.
 
 ### Nightly database backup
 
-The controller can copy its database every night while it runs. Mount a folder for
-the copies and set:
+The controller can copy its database every night while it runs. Create a folder for
+the copies on the host, name it in `.env`, and add `compose.backup.yaml` to Compose
+commands (with `compose.wake.yaml` too if you use it):
+
+```sh
+sudo install -d -o 10001 -g 10001 -m 700 /srv/poundlock-backup
+echo POUNDLOCK_BACKUP_PATH=/srv/poundlock-backup >> .env
+docker compose -f compose.yaml -f compose.backup.yaml up -d
+```
+
+The override mounts that folder at `/backup` in the controller and sets:
 
 | Setting | Meaning |
 |---|---|
-| `POUNDLOCK_BACKUP_DIR` | The folder inside the controller container, for example `/backup`. Unset, there is no nightly backup. |
-| `POUNDLOCK_BACKUP_AT` | Time of day in UTC, `HH:MM`; default `08:30`. |
+| `POUNDLOCK_BACKUP_DIR` | The folder inside the controller container: `/backup`. Unset, there is no nightly backup. |
+| `POUNDLOCK_BACKUP_AT` | Time of day in UTC, `HH:MM`; default `08:30`. Set it in `.env` to change it. |
 
 Each run takes a consistent copy with SQLite's `VACUUM INTO` (writers keep
 working), checks it (`PRAGMA integrity_check`, every table present, row counts of
@@ -175,7 +207,7 @@ older binary. Reconnect nodes only after checking the restored controller.
 Drain active work and make a stopped backup. Replace `.env`'s `POUNDLOCK_IMAGE`
 with the new release's digest, retaining your other settings. Run
 `docker compose pull` and `docker compose up -d`, then check login, Machines,
-Generate and a small verified job.
+Test inference and a small verified job.
 
 Upgrade the controller before its nodes. It answers an older node's polls as it
 always did, while a newer node against an older controller polls every
@@ -184,7 +216,8 @@ upgraded.
 
 ### From 0.1.x to 0.2.0
 
-1. Deploy the 0.2.0 image. On its first start the controller saves the database as
+1. Deploy a 0.2.x image (0.2.0 or 0.2.1); later releases no longer upgrade a 0.1.x
+   database. On its first start the controller saves the database as
    `poundlock.sqlite3.pre-secret-binding` and re-seals stored secrets.
 2. If your build embeds an update key, sign the node binaries it serves:
    `scripts/sign-node-updates.py` ([Node update signing](../node-update-signing.md)).
@@ -195,13 +228,13 @@ upgraded.
    `sudo bash poundlock-node.sh account`, with the installer from Machines. Its
    runtime, models and key files must then live outside home folders.
 5. Give each llama.cpp server an API key: create the key file, set `api_key_file` in
-   the runtime manifest, and enter the same key on the endpoint in Setup.
+   the runtime manifest, and enter the same key on that model server in Connections.
 
 Rollback uses the prior image together with the matching pre-upgrade backup.
-From 0.2.0 the controller binds every stored secret to its database row and
-re-seals older secrets the first time it starts, so a 0.1.x image cannot read a
-database a 0.2.0 controller has opened. Before re-sealing it saves the database
-as it was beside the original, as `/data/poundlock.sqlite3.pre-secret-binding`;
+From 0.2.0 the controller binds every stored secret to its database row, so a
+0.1.x image cannot read a database a 0.2.x controller has opened. When 0.2.x
+re-sealed the older secrets it saved the database as it was beside the original,
+as `/data/poundlock.sqlite3.pre-secret-binding`;
 to roll back, stop the services, put that file in place of
 `/data/poundlock.sqlite3` (removing its `-wal` and `-shm` files), and start the
 older image. Changes made since the upgrade are lost. The copy holds the same secrets
@@ -216,8 +249,8 @@ tags, from the image that validation already tested.
 
 ## Failure recovery
 
-- Identity only lists models. Generate waits 90 seconds for an answer and does
-  not retry. Retry Generate if it times out. The first request after idle can
+- Check listing only lists models. Test inference waits 90 seconds for an answer
+  and does not retry. Run it again if it times out. The first request after idle can
   be slower than a later retry; a later success is not proof that every first
   request will finish in time.
 - Interactive chat uses `POUNDLOCK_EXTERNAL_TIMEOUT_SECONDS` after the machine

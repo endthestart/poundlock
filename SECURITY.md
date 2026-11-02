@@ -85,10 +85,11 @@ through the supervisor's proxy, which reaches only public addresses on ports 80 
 responsible for model-server access control, TLS, network rules and host updates.
 The operations guide documents lease expiry and interrupted-stream behavior.
 The administrator token is a file-backed bearer: replace the file and restart
-to revoke it; browser Sign out only clears that device. The browser keeps it in
-local storage until Sign out. The UI is served with a strict content security
-policy and may not be framed. Job list APIs omit
-result bodies. Enrollment refuses a still-online or paused machine name, and an enrollment token created for one machine name cannot enroll another or take over an existing machine.
+to revoke it; browser Sign out only clears that device. The browser keeps a token
+for its tab only, or in local storage until Sign out when **Remember on this device**
+is ticked. The UI is served with a strict content security
+policy and may not be framed. Job list APIs return summaries without a job's
+policy, result or error. Enrollment refuses a still-online or paused machine name, and an enrollment token created for one machine name cannot enroll another or take over an existing machine.
 Release container images are attested. Base images are pinned by digest and Pi
 and its dependencies are installed from a committed lockfile, but Debian packages
 are upgraded at build time, so later rebuilds are not bit-for-bit reproducible.
