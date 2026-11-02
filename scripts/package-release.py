@@ -5,6 +5,7 @@ import hashlib
 import pathlib
 import re
 import shutil
+import sys
 import tarfile
 import tempfile
 
@@ -27,8 +28,11 @@ def cargo_version():
     return tomllib.loads(text)['package']['version']
 
 
-if args.version.removeprefix('v') != cargo_version():
-    parser.error('version must match Cargo.toml')
+sys.path.insert(0, str(root / 'scripts'))
+from dev_version import is_dev_of
+# A main build packages as its dev prerelease (scripts/dev_version.py).
+if args.version.removeprefix('v') != cargo_version() and not is_dev_of(args.version, cargo_version()):
+    parser.error('version must match Cargo.toml, or be its next minor dev prerelease')
 if args.image is None:
     raise SystemExit(0)
 if not re.fullmatch(r'[a-z0-9][a-z0-9./:_-]*@sha256:[a-f0-9]{64}', args.image):
@@ -48,9 +52,13 @@ for platform in dict.fromkeys(platforms):
             archive.add(source / name, arcname=name)
 with tempfile.TemporaryDirectory(prefix='poundlock-release-') as temporary:
     stage = pathlib.Path(temporary)
-    for name in ('compose.yaml', 'compose.wake.yaml', 'compose.repositories.yaml', 'README.md', 'LICENSE', 'NOTICE', 'SECURITY.md', 'CONTRIBUTING.md', 'THIRD_PARTY_NOTICES.md'):
+    for name in ('compose.yaml', 'compose.wake.yaml', 'compose.repositories.yaml', 'compose.backup.yaml', 'README.md', 'CHANGELOG.md', 'ECOSYSTEM.md', 'LICENSE', 'NOTICE', 'SECURITY.md', 'CONTRIBUTING.md', 'THIRD_PARTY_NOTICES.md'):
         shutil.copyfile(root / name, stage / name)
     shutil.copytree(root / 'docs' / 'guide', stage / 'docs' / 'guide')
+    # Bundle docs link to these; keep them at the same relative paths.
+    for name in ('node-update-signing.md', 'linux-node.md'):
+        shutil.copyfile(root / 'docs' / name, stage / 'docs' / name)
+    shutil.copytree(root / 'examples' / 'litellm', stage / 'examples' / 'litellm')
     maps = stage / 'docs' / 'maps'
     maps.mkdir(parents=True)
     for name in ('poundlock-release.architecture.html', 'poundlock-release.architecture.json'):

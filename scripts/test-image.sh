@@ -10,6 +10,7 @@ run_fixture() {
     --read-only --tmpfs /tmp:rw,nosuid,size=512m --memory 2g --pids-limit 256 \
     "$@" --entrypoint node "$image" - < "$script"
 }
+# shellcheck disable=SC2016 # deliberate: the fixture must receive $HOME and ${PATH} unexpanded
 for key in '' fixture-inference-key '!printf unexpected $HOME ${PATH}'; do
   run_fixture tests/uat/runner-protocol.cjs --env "POUNDLOCK_TEST_INFERENCE_KEY=$key"
 done

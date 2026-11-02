@@ -1,3 +1,7 @@
 # Trivy exceptions for the image scan in .github/workflows/ci.yml.
 # One id per line as "CVE-... exp:YYYY-MM-DD", with the reason on the line above.
 # Trivy reports the id again the day after the date. Nothing here is permanent.
+# undici 6.29.0 bundled inside npm 11.21.1 (the newest npm, and npm 12.2.1, still bundle it); Pi's own copy is overridden to the fixed 8.12.2. Remove once an npm release bundles undici 6.29.1 or later.
+CVE-2026-109869 exp:2026-11-24
+CVE-2026-109383 exp:2026-11-24
+CVE-2026-87018 exp:2026-11-24

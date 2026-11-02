@@ -4,7 +4,7 @@
 #   POUNDLOCK_UPDATE_SIGNING_KEY='<key>' bash scripts/sign-node-manifests.sh DIR VERSION
 #
 # The key is an Ed25519 private key as a PKCS#8 PEM, or that PEM base64-encoded
-# on one line (the form kept in CI secrets and the macOS Keychain).
+# on one line (the form kept in the macOS Keychain).
 #
 # Beside each binary it writes poundlock.manifest.json, the exact bytes that are
 # signed ({"os","arch","version","sha256"}), and poundlock.manifest.sig, the

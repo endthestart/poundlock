@@ -1,14 +1,16 @@
 """Turn a Poundlock Toolkit recommendation summary into a capability evidence block.
 
     poundlock-toolkit recommend --format json RESULT.json [...] --output summary.json
-    python3 -m pip install 'jsonschema>=4.23,<5'
-    python3 scripts/toolkit-capabilities.py summary.json > block.json
+    python3 -m venv .venv && .venv/bin/pip install 'jsonschema>=4.23,<5'
+    .venv/bin/python scripts/toolkit-capabilities.py summary.json > block.json
+
+(or `uv run --with 'jsonschema>=4.23,<5' scripts/toolkit-capabilities.py ...`).
 
 Paste the output into a model's Capability evidence field in Models.
 
 The input is Toolkit's versioned summary, `urn:poundlock-toolkit:recommendation:1`
-(Poundlock Toolkit 0.5.0 or later). Toolkit decides every level, count and pairing;
-this script only maps those verdicts onto Poundlock's capability contract,
+(Poundlock Toolkit 0.5.0 or later). Toolkit decides every level,
+count and pairing; this script only maps those verdicts onto Poundlock's capability contract,
 `docs/reference/fixtures/capability-measurement.schema.json`, and validates each
 entry against it before printing. It does not import Toolkit, and it is read-only
 and network-free.
