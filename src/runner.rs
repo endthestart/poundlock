@@ -305,6 +305,7 @@ async fn execute(
                 outcome.agent.stderr,
                 4 * 1024 * 1024,
             );
+            let pi = crate::harness::pi_outcome(&output);
             // A truncated capture never stopped the agent process (see
             // `Docker::exec`), so its exit code and any terminal message it
             // emitted are both real. The code still distinguishes a cutoff
@@ -316,7 +317,7 @@ async fn execute(
             // transcript, and calling it an output-limit failure attributed a
             // noisy dependency's warnings to the agent's work.
             let code = if outcome.agent.stdout_truncated {
-                Some(if crate::harness::agent_turn_settled(&output) {
+                Some(if pi.settled {
                     "output_limit_after_turn"
                 } else {
                     "output_limit_mid_turn"
@@ -343,8 +344,7 @@ async fn execute(
                     // wall clock ran out (see `runner_sandbox::execute`, which
                     // ran verification in that case). Distinguish that from a
                     // mid-turn cutoff the same way the output-budget arm does.
-                    let (code, message) =
-                        wall_budget_outcome(crate::harness::agent_turn_settled(&output));
+                    let (code, message) = wall_budget_outcome(pi.settled);
                     error = Some(
                         json!({"layer":"runner","code":code,"message":message,"retry_safe":false}),
                     );
@@ -373,7 +373,7 @@ async fn execute(
                 );
             }
             if error.is_none() {
-                error = crate::harness::pi_failure(&output);
+                error = pi.failure;
             }
             (output, outcome.patches)
         }

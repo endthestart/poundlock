@@ -1,9 +1,10 @@
-"""Linux adapter: /proc ownership checks and sysfs GPU readings."""
+"""Linux adapter: /proc ownership checks, sysfs GPU readings and a systemd-inhibit keep-awake."""
 
 from __future__ import annotations
 
 import os
 import re
+import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -23,6 +24,28 @@ class LinuxSystem(System):
         super().__init__()
         self.proc_root = proc_root
         self.sysfs_root = sysfs_root
+        self.supports_keep_awake = all(shutil.which(tool) for tool in ("systemd-inhibit", "tail"))
+
+    def keep_awake_command(self, server_pid: int) -> Optional[List[str]]:
+        inhibit, tail = shutil.which("systemd-inhibit"), shutil.which("tail")
+        if not inhibit or not tail:
+            return None
+        why = f"--why=A model is loaded (llama-server {server_pid})"
+        block = ["--mode=block", "--who=poundlock-llamacpp", why]
+        # Sleep and idle as separate requests, as the node agent asks: older systemd
+        # authorises a combined mask as lid-switch inhibition.
+        return [
+            inhibit,
+            "--what=sleep",
+            *block,
+            inhibit,
+            "--what=idle",
+            *block,
+            tail,
+            f"--pid={server_pid}",
+            "-f",
+            "/dev/null",
+        ]
 
     def inspect(self, pid: int) -> Optional[ProcessInfo]:
         if pid <= 0:

@@ -135,10 +135,6 @@ pub(super) fn validate_transport(controller: &str, allow_insecure_http: bool) ->
     Ok(())
 }
 
-pub fn check_config(path: &Path) -> Result<Value> {
-    check_config_identity(path, false)
-}
-
 pub fn check_config_identity(path: &Path, required: bool) -> Result<Value> {
     let config = read(path)?;
     if required || !config.controller.is_empty() || !config.name.is_empty() {
@@ -288,16 +284,22 @@ mod tests {
             "[runtimes.ready]\nidentity=['relative-identity']",
         ] {
             std::fs::write(&path, bad).unwrap();
-            assert!(check_config(&path).is_err(), "{bad}");
+            assert!(check_config_identity(&path, false).is_err(), "{bad}");
         }
         std::fs::write(&path, super::super::example_config()).unwrap();
-        assert!(check_config(&path).is_ok());
+        assert!(check_config_identity(&path, false).is_ok());
         // Self-update stays on unless the configuration turns it off; what it
         // may install is decided by the update checks, not by this setting.
         std::fs::write(&path, "[runtimes.ready]").unwrap();
-        assert_eq!(check_config(&path).unwrap()["auto_update"], true);
+        assert_eq!(
+            check_config_identity(&path, false).unwrap()["auto_update"],
+            true
+        );
         std::fs::write(&path, "auto_update = false\n[runtimes.ready]").unwrap();
-        assert_eq!(check_config(&path).unwrap()["auto_update"], false);
+        assert_eq!(
+            check_config_identity(&path, false).unwrap()["auto_update"],
+            false
+        );
         assert!(validate_identity("https://user:secret@example.test", "node").is_err());
         assert!(validate_identity("https://controller.example.test", "node").is_ok());
     }
@@ -311,7 +313,7 @@ mod tests {
         };
         for remote in ["http://10.20.0.5:7331", "http://controller.lan:7331"] {
             std::fs::write(&path, config(remote, "")).unwrap();
-            let error = check_config(&path).unwrap_err();
+            let error = check_config_identity(&path, false).unwrap_err();
             assert!(
                 error.to_string().contains("allow_insecure_http"),
                 "{error:#}"
@@ -326,7 +328,7 @@ mod tests {
             };
             assert!(load(options).is_err(), "{remote}");
             std::fs::write(&path, config(remote, "allow_insecure_http = true\n")).unwrap();
-            assert!(check_config(&path).is_ok(), "{remote}");
+            assert!(check_config_identity(&path, false).is_ok(), "{remote}");
         }
         // An address on the command line is held to the same rule.
         std::fs::write(&path, config("https://controller.lan", "")).unwrap();
@@ -346,7 +348,7 @@ mod tests {
             "http://[::1]:7331",
         ] {
             std::fs::write(&path, config(fine, "")).unwrap();
-            assert!(check_config(&path).is_ok(), "{fine}");
+            assert!(check_config_identity(&path, false).is_ok(), "{fine}");
         }
     }
 
@@ -357,12 +359,12 @@ mod tests {
 
         // Absent identity: still a valid runtime.
         std::fs::write(&path, "[runtimes.ready]\n").unwrap();
-        let checked = check_config(&path).unwrap();
+        let checked = check_config_identity(&path, false).unwrap();
         assert_eq!(checked["runtimes"], json!(["ready"]));
 
         // A relative executable is rejected exactly like ensure/renew/etc.
         std::fs::write(&path, "[runtimes.ready]\nidentity=['relative-identity']\n").unwrap();
-        assert!(check_config(&path).is_err());
+        assert!(check_config_identity(&path, false).is_err());
 
         // A real absolute executable is accepted.
         std::fs::write(
@@ -370,6 +372,6 @@ mod tests {
             "[runtimes.ready]\nidentity=['/bin/echo', 'identity']\n",
         )
         .unwrap();
-        assert!(check_config(&path).is_ok());
+        assert!(check_config_identity(&path, false).is_ok());
     }
 }

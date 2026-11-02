@@ -50,14 +50,27 @@ async fn update_binary(
             "no node binary is published for this machine's platform",
         ));
     };
+    serve_binary(&file, None)
+}
+
+/// Reads a published node binary, refuses one over the size cap, and serves it
+/// with its checksum; `download_name` makes it an attachment with that name.
+fn serve_binary(file: &CachedFile, download_name: Option<String>) -> ApiResult<Response> {
     let bytes = std::fs::read(&file.path)
         .map_err(|_| ApiError::unavailable("the node binary is missing from this controller"))?;
     if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
         return Err(ApiError::unavailable("node binary exceeds the size cap"));
     }
-    Response::builder()
+    let mut response = Response::builder()
         .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header("x-poundlock-sha256", &file.sha256)
+        .header("x-poundlock-sha256", &file.sha256);
+    if let Some(name) = download_name {
+        response = response.header(
+            header::CONTENT_DISPOSITION,
+            format!("attachment; filename=\"{name}\""),
+        );
+    }
+    response
         .body(Body::from(bytes))
         .map_err(|_| ApiError::unavailable("could not serve the node binary"))
 }
@@ -87,7 +100,7 @@ async fn list_binaries(
         }
     }
     Ok(Json(
-        json!({"version":env!("CARGO_PKG_VERSION"),"platforms":platforms}),
+        json!({"version":crate::VERSION,"platforms":platforms}),
     ))
 }
 
@@ -132,10 +145,10 @@ async fn upload_signatures(
                 "a signed manifest lacks os, arch, version or sha256",
             ));
         };
-        if version != env!("CARGO_PKG_VERSION") {
+        if version != crate::VERSION {
             return Err(ApiError::bad(format!(
                 "a signed manifest is for {version}; this controller serves {}",
-                env!("CARGO_PKG_VERSION")
+                crate::VERSION
             )));
         }
         let served = artifact_for_platform(&state, os, arch);
@@ -169,20 +182,7 @@ async fn download_binary(
             "no node binary is published for this platform",
         ));
     };
-    let bytes = std::fs::read(&file.path)
-        .map_err(|_| ApiError::unavailable("the node binary is missing from this controller"))?;
-    if bytes.len() as u64 > MAX_ARTIFACT_BYTES {
-        return Err(ApiError::unavailable("node binary exceeds the size cap"));
-    }
-    Response::builder()
-        .header(header::CONTENT_TYPE, "application/octet-stream")
-        .header(
-            header::CONTENT_DISPOSITION,
-            format!("attachment; filename=\"poundlock-{os}-{arch}\""),
-        )
-        .header("x-poundlock-sha256", &file.sha256)
-        .body(Body::from(bytes))
-        .map_err(|_| ApiError::unavailable("could not serve the node binary"))
+    serve_binary(&file, Some(format!("poundlock-{os}-{arch}")))
 }
 
 fn known_platforms(state: &AppState) -> Vec<(String, String)> {
@@ -210,7 +210,7 @@ fn known_platforms(state: &AppState) -> Vec<(String, String)> {
 
 fn manifest(state: &AppState, node: &Node) -> Value {
     let (os, arch) = node_platform(node);
-    let version = env!("CARGO_PKG_VERSION");
+    let version = crate::VERSION;
     if arch.is_empty() {
         return json!({
             "available":false,

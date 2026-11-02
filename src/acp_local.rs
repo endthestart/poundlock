@@ -1,14 +1,13 @@
 use crate::acp::AcpOptions;
-use crate::domain::{Event, Job, SubmitJob};
+use crate::controller_client::{ControllerClient, resource_id};
+use crate::domain::{Job, SubmitJob};
 use crate::harness::{PiLaunch, PiMode, pi_launch};
 use agent_client_protocol::ConnectionTo;
 use agent_client_protocol::schema::v1 as acp;
 use anyhow::{Result, bail};
-use reqwest::Client;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::sync::Mutex;
 use uuid::Uuid;
@@ -19,25 +18,24 @@ pub(crate) struct AcpSession {
 }
 
 pub(crate) struct AcpApi {
-    base: String,
-    token: String,
+    controller: ControllerClient,
     pub options: AcpOptions,
-    client: Client,
 }
 
 impl AcpApi {
     pub(crate) fn new(options: AcpOptions) -> Result<Self> {
         Ok(Self {
-            base: options.controller.trim_end_matches('/').into(),
-            token: options.token.clone(),
+            controller: ControllerClient::new(&options.controller, &options.token)?,
             options,
-            client: Client::builder().timeout(Duration::from_secs(30)).build()?,
         })
     }
 
     pub(crate) async fn cancel(&self, id: &str) -> Result<Value> {
-        self.post(&format!("/api/v1/jobs/{id}/cancel"), &serde_json::json!({}))
-            .await
+        let id = resource_id("job", id)?;
+        Ok(self
+            .controller
+            .post(&format!("/api/v1/jobs/{id}/cancel"), &serde_json::json!({}))
+            .await?)
     }
 
     async fn submit(&self, prompt: &str) -> Result<Job> {
@@ -46,70 +44,21 @@ impl AcpApi {
             .project_id
             .clone()
             .ok_or_else(|| anyhow::anyhow!("delegated ACP requires --project-id"))?;
-        self.post(
-            "/api/v1/jobs",
-            &SubmitJob {
-                source: None,
-                idempotency_key: Uuid::new_v4().to_string(),
-                policy: Default::default(),
-                project_id,
-                model_profile_id: self.options.model_profile_id.clone(),
-                harness_profile_id: self.options.harness_profile_id.clone(),
-                prompt: prompt.into(),
-            },
-        )
-        .await
-    }
-
-    async fn job(&self, id: &str) -> Result<Job> {
-        self.get(&format!("/api/v1/jobs/{id}")).await
-    }
-
-    async fn events(&self, id: &str, after: i64) -> Result<Vec<Event>> {
-        self.get(&format!("/api/v1/jobs/{id}/events?after={after}"))
-            .await
-    }
-
-    async fn get<T: serde::de::DeserializeOwned>(&self, path: &str) -> Result<T> {
-        self.decode(
-            self.client
-                .get(format!("{}{}", self.base, path))
-                .bearer_auth(&self.token)
-                .send()
-                .await?,
-        )
-        .await
-    }
-
-    async fn post<T: serde::de::DeserializeOwned>(
-        &self,
-        path: &str,
-        body: &impl serde::Serialize,
-    ) -> Result<T> {
-        self.decode(
-            self.client
-                .post(format!("{}{}", self.base, path))
-                .bearer_auth(&self.token)
-                .json(body)
-                .send()
-                .await?,
-        )
-        .await
-    }
-
-    async fn decode<T: serde::de::DeserializeOwned>(
-        &self,
-        response: reqwest::Response,
-    ) -> Result<T> {
-        let status = response.status();
-        let bytes = response.bytes().await?;
-        if !status.is_success() {
-            bail!(
-                "controller returned {status}: {}",
-                String::from_utf8_lossy(&bytes)
-            );
-        }
-        Ok(serde_json::from_slice(&bytes)?)
+        Ok(self
+            .controller
+            .post(
+                "/api/v1/jobs",
+                &SubmitJob {
+                    source: None,
+                    idempotency_key: Uuid::new_v4().to_string(),
+                    policy: Default::default(),
+                    project_id,
+                    model_profile_id: self.options.model_profile_id.clone(),
+                    harness_profile_id: self.options.harness_profile_id.clone(),
+                    prompt: prompt.into(),
+                },
+            )
+            .await?)
     }
 }
 
@@ -151,45 +100,42 @@ async fn drive_job(
             job.id
         ),
     )?;
-    let mut after = 0_i64;
-    loop {
-        for event in api.events(&job.id, after).await? {
-            after = event.sequence;
-            notify(
-                connection,
-                session_id.clone(),
-                &format!("**{}** — {}", event.kind, event.message),
-            )?;
-        }
-        let current = api.job(&job.id).await?;
-        match current.status.as_str() {
-            "completed" => {
-                let patches = current
-                    .result
-                    .unwrap_or_default()
-                    .get("patches")
-                    .and_then(Value::as_array)
-                    .cloned()
-                    .unwrap_or_default();
-                for patch in patches {
-                    let root = patch.get("root").and_then(Value::as_str).unwrap_or("root");
-                    let diff = patch.get("patch").and_then(Value::as_str).unwrap_or("");
-                    notify(
-                        connection,
-                        session_id.clone(),
-                        &format!("### Patch: {root}\n\n```diff\n{diff}\n```"),
-                    )?;
-                }
-                return Ok(());
-            }
-            "failed" | "cancelled" => bail!(
-                "job ended as {}: {}",
-                current.status,
-                current.error.unwrap_or_default()
-            ),
-            _ => tokio::time::sleep(Duration::from_secs(2)).await,
-        }
+    let current: Job = serde_json::from_value(
+        api.controller
+            .follow_job(&job.id, |event| {
+                notify(
+                    connection,
+                    session_id.clone(),
+                    &format!("**{}** — {}", event.kind, event.message),
+                )?;
+                Ok(())
+            })
+            .await?,
+    )?;
+    if current.status != "completed" {
+        bail!(
+            "job ended as {}: {}",
+            current.status,
+            current.error.unwrap_or_default()
+        );
     }
+    let patches = current
+        .result
+        .unwrap_or_default()
+        .get("patches")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+    for patch in patches {
+        let root = patch.get("root").and_then(Value::as_str).unwrap_or("root");
+        let diff = patch.get("patch").and_then(Value::as_str).unwrap_or("");
+        notify(
+            connection,
+            session_id.clone(),
+            &format!("### Patch: {root}\n\n```diff\n{diff}\n```"),
+        )?;
+    }
+    Ok(())
 }
 
 async fn drive_attached(
@@ -233,8 +179,8 @@ async fn drive_attached(
             model_id: &model_id,
             context_tokens,
             max_output_tokens,
-            base_url: &format!("{}/v1", api.base),
-            api_key: &api.token,
+            base_url: &format!("{}/v1", api.controller.base()),
+            api_key: api.controller.token(),
             extra_note: "",
             instruction_files: &api.options.instruction_files,
         },
@@ -305,7 +251,7 @@ pub(crate) fn notify(
 }
 
 async fn advertised_model(api: &AcpApi, wanted: &str) -> Result<(String, u64, u64)> {
-    let body: Value = api.get("/v1/models").await?;
+    let body: Value = api.controller.get("/v1/models").await?;
     for row in body
         .get("data")
         .and_then(Value::as_array)
@@ -363,6 +309,7 @@ mod tests {
     use std::process::Stdio;
     use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, Ordering};
+    use std::time::Duration;
 
     fn command(script: &str, directory: &std::path::Path) -> tokio::process::Command {
         let mut command = tokio::process::Command::new("/bin/sh");

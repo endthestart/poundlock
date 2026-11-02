@@ -62,7 +62,7 @@ def script_interpreter_runs(info: ProcessInfo, binary: Path) -> bool:
 class System:
     name = "generic"
     default_sweeper = "external"
-    supports_caffeinate = False
+    supports_keep_awake = False
 
     def __init__(self) -> None:
         self._children: Dict[int, subprocess.Popen[bytes]] = {}
@@ -89,7 +89,8 @@ class System:
         """Variables set unless the profile sets them."""
         return {}
 
-    def caffeinate_command(self, server_pid: int) -> Optional[List[str]]:
+    def keep_awake_command(self, server_pid: int) -> Optional[List[str]]:
+        """A helper that keeps the machine from sleeping until `server_pid` exits."""
         return None
 
     # --- files ---------------------------------------------------------------
@@ -130,6 +131,26 @@ class System:
             raise ManagerError(f"{executable} --version exited {completed.returncode}: {first}")
         return output
 
+    def list_devices(self, executable: Path, env: Dict[str, str], timeout: float = 60.0) -> str:
+        """`--list-devices` output, run with the server's environment, which can decide how
+        many devices the backend shows."""
+        try:
+            completed = subprocess.run(
+                [str(executable), "--list-devices"],
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                check=False,
+                timeout=timeout,
+                env=env,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            raise ManagerError(f"cannot run {executable} --list-devices: {exc}") from exc
+        output = (completed.stdout + completed.stderr)[:65_536].decode(errors="replace")
+        if completed.returncode != 0:
+            first = (output.strip().splitlines() or ["no output"])[0][:200]
+            raise ManagerError(f"{executable} --list-devices exited {completed.returncode}: {first}")
+        return output
+
     def read_log(self, path: Path, limit: int = 4 * 1024 * 1024) -> str:
         with path.open("rb") as stream:
             return stream.read(limit).decode(errors="replace")
@@ -147,12 +168,10 @@ class System:
         return self._spawn(argv, env, log_path, new_session=False)
 
     def spawn_helper(self, argv: Sequence[str], env: Dict[str, str], log_path: Path) -> int:
-        """Start a helper (sweeper, caffeinate) that must outlive the command."""
+        """Start a helper (sweeper, keep-awake block) that must outlive the command."""
         return self._spawn(argv, env, log_path, new_session=True)
 
-    def _spawn(
-        self, argv: Sequence[str], env: Dict[str, str], log_path: Path, *, new_session: bool
-    ) -> int:
+    def _spawn(self, argv: Sequence[str], env: Dict[str, str], log_path: Path, *, new_session: bool) -> int:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
         try:

@@ -1,5 +1,5 @@
 use super::{ApiError, ApiResult, AppState, admin_auth, api_token_auth};
-use crate::domain::{Event, Job, SubmitJob};
+use crate::domain::{Event, JobSummary, SubmitJob};
 use axum::extract::{DefaultBodyLimit, Extension, Path, Query, Request, State};
 use axum::http::HeaderMap;
 use axum::middleware::{self, Next};
@@ -86,7 +86,7 @@ async fn job_options(
     Ok(Json(
         json!({"schema_version":crate::contract::SCHEMA_VERSION,"contract_revision":crate::contract::CONTRACT_REVISION,
         "role":if operator { "operator" } else { "developer" },
-        "permissions":(crate::domain::API_TOKEN_PERMISSIONS.into_iter().filter(|permission| operator || api_token_auth(&state,&headers,permission).is_ok()).collect::<Vec<_>>()),
+        "permissions":(crate::domain::API_TOKEN_PERMISSIONS.into_iter().map(|(code, _)| code).filter(|permission| operator || api_token_auth(&state,&headers,permission).is_ok()).collect::<Vec<_>>()),
         "models":models,
         "harnesses":state.store.list_harness_profiles()?,
         "git_hosts":state.config.git_hosts,
@@ -94,6 +94,7 @@ async fn job_options(
         "runner_status":state.runners.status(),
         "source_limits":{"bytes":crate::source::MAX_SOURCE_BYTES,"files":10000},
         "active_jobs_per_token":state.config.max_active_jobs_per_token,
+        "jobs_limit":JOB_LIST_LIMIT,
         "verifier":crate::verifier_toolchain::advertised(),
         "effective_budgets":effective_budgets(),
         "policy_limits":policy_limits()}),
@@ -208,14 +209,21 @@ fn require_tenant_job(
     }
 }
 
+/// The newest jobs `GET /api/v1/jobs` returns.
+const JOB_LIST_LIMIT: u32 = 250;
+
 async fn list_jobs(
     State(state): State<AppState>,
     headers: HeaderMap,
     principal: Option<Extension<crate::domain::ApiTokenPrincipal>>,
-) -> ApiResult<Json<Vec<Job>>> {
+) -> ApiResult<Json<Vec<JobSummary>>> {
     let principal = principal.map(|Extension(value)| value);
     let scope = tenant(&state, &headers, principal.as_ref());
-    Ok(Json(state.store.list_jobs_for(250, scope.as_deref())?))
+    Ok(Json(
+        state
+            .store
+            .list_jobs_for(JOB_LIST_LIMIT, scope.as_deref())?,
+    ))
 }
 
 async fn submit_job(

@@ -8,6 +8,8 @@ use serde_json::{Value, json};
 use uuid::Uuid;
 
 impl Store {
+    /// An operator submission: no application token and no unfinished-job cap.
+    #[cfg(test)]
     pub fn submit_job(&self, input: &SubmitJob) -> Result<Job> {
         self.submit_job_for(input, None, u32::MAX)
     }
@@ -73,6 +75,7 @@ impl Store {
             cancel_requested: false,
             result: None,
             error: None,
+            verification: None,
             created_at: timestamp.clone(),
             updated_at: timestamp.clone(),
         };
@@ -115,28 +118,46 @@ impl Store {
         Ok(job)
     }
 
-    pub fn list_jobs(&self, limit: u32) -> Result<Vec<Job>> {
+    pub fn list_jobs(&self, limit: u32) -> Result<Vec<JobSummary>> {
         self.list_jobs_for(limit, None)
     }
 
     /// `api_token_id: Some(id)` lists only that token's jobs; `None` lists
-    /// every job, which is the operator view.
-    pub fn list_jobs_for(&self, limit: u32, api_token_id: Option<&str>) -> Result<Vec<Job>> {
-        let connection = self.connection()?;
-        let select =
-            "SELECT id,idempotency_key,project_id,model_profile_id,harness_profile_id,prompt,
-             status,attempt_id,cancel_requested,NULL,NULL,created_at,updated_at,policy_json
+    /// every job, which is the operator view. On the reader, so a list never
+    /// holds up writes, and by the created_at indexes, so it reads only the
+    /// rows it returns.
+    pub fn list_jobs_for(&self, limit: u32, api_token_id: Option<&str>) -> Result<Vec<JobSummary>> {
+        let connection = self.reader()?;
+        let select = "SELECT id,idempotency_key,project_id,model_profile_id,harness_profile_id,
+             prompt,status,attempt_id,cancel_requested,created_at,updated_at,
+             json_extract(result_json,'$.provenance.verification.status')
              FROM jobs";
+        let summary = |row: &rusqlite::Row<'_>| {
+            Ok(JobSummary {
+                id: row.get(0)?,
+                idempotency_key: row.get(1)?,
+                project_id: row.get(2)?,
+                model_profile_id: row.get(3)?,
+                harness_profile_id: row.get(4)?,
+                prompt: row.get(5)?,
+                status: row.get(6)?,
+                attempt_id: row.get(7)?,
+                cancel_requested: row.get(8)?,
+                created_at: row.get(9)?,
+                updated_at: row.get(10)?,
+                verification: row.get(11)?,
+            })
+        };
         Ok(match api_token_id {
             Some(token) => connection
                 .prepare(&format!(
                     "{select} WHERE api_token_id=?1 ORDER BY created_at DESC LIMIT ?2"
                 ))?
-                .query_map(params![token, limit], job_row)?
+                .query_map(params![token, limit], summary)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             None => connection
                 .prepare(&format!("{select} ORDER BY created_at DESC LIMIT ?1"))?
-                .query_map([limit], job_row)?
+                .query_map([limit], summary)?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
         })
     }
@@ -309,6 +330,12 @@ impl Store {
 }
 
 pub(super) fn job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
+    let result = json_or_none(row.get(9)?);
+    let verification = result
+        .as_ref()
+        .and_then(|value| value.pointer("/provenance/verification/status"))
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     Ok(Job {
         id: row.get(0)?,
         idempotency_key: row.get(1)?,
@@ -319,8 +346,9 @@ pub(super) fn job_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Job> {
         status: row.get(6)?,
         attempt_id: row.get(7)?,
         cancel_requested: row.get(8)?,
-        result: json_or_none(row.get(9)?),
+        result,
         error: json_or_none(row.get(10)?),
+        verification,
         created_at: row.get(11)?,
         updated_at: row.get(12)?,
         policy: serde_json::from_str(&row.get::<_, String>(13)?).map_err(|error| {
@@ -347,3 +375,7 @@ pub(super) fn insert_event(
     )?;
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "jobs_tests.rs"]
+mod tests;

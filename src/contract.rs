@@ -26,13 +26,20 @@ pub const FEATURE_REASONING_LEVELS: &str = "reasoning_levels";
 /// `poundlock.served_model`, `provider` and `pricing` with its source:
 /// what answers behind a stable name, for display only (revision 4).
 pub const FEATURE_ROUTE_CATALOG: &str = "route_catalog";
+/// `token_permissions`: each API token permission with the label clients
+/// show for it, so no client keeps its own copy (revision 5).
+pub const FEATURE_PERMISSION_LABELS: &str = "permission_labels";
+/// `caller_permissions`: the permissions of the token that asked, so a client
+/// reads them instead of probing for each one (revision 5).
+pub const FEATURE_CALLER_PERMISSIONS: &str = "caller_permissions";
 pub const FEATURE_ROUTING_REVISION: &str = "routing_revision";
 pub const FEATURE_USAGE_SUMMARY: &str = "usage_summary";
 pub const FEATURE_VERIFIER_TOOLCHAIN: &str = "verifier_toolchain";
 
-pub const CAPABILITY_FEATURES: [&str; 14] = [
+pub const CAPABILITY_FEATURES: [&str; 16] = [
     FEATURE_ACCESS_PREFLIGHT,
     FEATURE_AVAILABILITY_REASONS,
+    FEATURE_CALLER_PERMISSIONS,
     FEATURE_CAPABILITY_EVIDENCE,
     FEATURE_CAPACITY_QUEUE,
     FEATURE_DATA_DESTINATION,
@@ -40,6 +47,7 @@ pub const CAPABILITY_FEATURES: [&str; 14] = [
     FEATURE_EXTERNAL_INVOKE,
     FEATURE_MANAGED_IDENTITIES,
     FEATURE_MODEL_STATUS,
+    FEATURE_PERMISSION_LABELS,
     FEATURE_REASONING_LEVELS,
     FEATURE_ROUTE_CATALOG,
     FEATURE_ROUTING_REVISION,
@@ -54,8 +62,16 @@ pub fn capabilities_document(product_version: &str) -> Value {
         "contract_revision": CONTRACT_REVISION,
         "product_version": product_version,
         "features": CAPABILITY_FEATURES,
+        "token_permissions": token_permissions(),
         "verifier": crate::verifier_toolchain::advertised(),
     })
+}
+
+pub fn token_permissions() -> Value {
+    json!(
+        crate::domain::API_TOKEN_PERMISSIONS
+            .map(|(code, label)| json!({"code": code, "label": label}))
+    )
 }
 
 pub fn models_poundlock_metadata() -> Value {

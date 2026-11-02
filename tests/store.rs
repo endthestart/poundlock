@@ -34,6 +34,7 @@ fn configured(store: &Store) -> (Endpoint, ModelProfile, Project) {
             wake_policy: "never".into(),
             idle_seconds: None,
             data_destination: "unknown".into(),
+            declare_server: false,
             thinking: "model_default".into(),
             thinking_budget_tokens: None,
             capabilities: Vec::new(),
@@ -101,124 +102,38 @@ fn reopen(directory: &tempfile::TempDir) -> Store {
     Store::open(&directory.path().join("state.sqlite3"), secrets).unwrap()
 }
 
-/// A database from before servers declared their destination: every model
-/// carried its own, and nothing recorded a server's.
-fn as_before_server_destinations(directory: &tempfile::TempDir, destinations: &[(&str, &str)]) {
+/// A database 0.2.x upgraded from 0.1.x can hold a model server whose models
+/// disagreed: it stayed undeclared, and each model kept its own destination.
+#[test]
+fn declaring_a_mixed_server_moves_only_the_routes_whose_destination_changed() {
+    let (directory, store) = store();
+    let mixed = endpoint_of(&store, "mixed", "openai");
+    let gateway = endpoint_of(&store, "gateway", "litellm");
+    model_on(&store, "mixed-local", &mixed, "unknown");
+    model_on(&store, "mixed-external", &mixed, "unknown");
+    drop(store);
     let db = rusqlite::Connection::open(directory.path().join("state.sqlite3")).unwrap();
-    db.execute_batch(
-        "ALTER TABLE endpoints DROP COLUMN data_destination;
-         ALTER TABLE model_profiles DROP COLUMN destination_from_endpoint;",
-    )
-    .unwrap();
-    for (name, destination) in destinations {
+    for (name, destination) in [
+        ("mixed-local", "operator_network"),
+        ("mixed-external", "external"),
+    ] {
         db.execute(
-            "UPDATE model_profiles SET data_destination=?2 WHERE name=?1",
+            "UPDATE model_profiles SET data_destination=?2, destination_from_endpoint=0
+             WHERE name=?1",
             [name, destination],
         )
         .unwrap();
     }
-}
-
-/// What the routing revision depends on, read straight from the database:
-/// if none of it moves, no client is asked to approve a route again.
-fn routes(directory: &tempfile::TempDir) -> Vec<(String, String, String, String)> {
-    let db = rusqlite::Connection::open(directory.path().join("state.sqlite3")).unwrap();
-    let mut statement = db
-        .prepare(
-            "SELECT m.name,m.data_destination,m.revision_nonce,e.revision_nonce
-             FROM model_profiles m JOIN endpoints e ON e.id=m.endpoint_id ORDER BY m.name",
-        )
-        .unwrap();
-    statement
-        .query_map([], |row| {
-            Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
-        })
-        .unwrap()
-        .collect::<rusqlite::Result<Vec<_>>>()
-        .unwrap()
-}
-
-#[test]
-fn servers_take_over_destinations_without_changing_any_model() {
-    let (directory, store) = store();
-    let agreeing = endpoint_of(&store, "agreeing", "openai");
-    let mixed = endpoint_of(&store, "mixed", "openai");
-    let undeclared = endpoint_of(&store, "undeclared", "openai");
-    let empty = endpoint_of(&store, "empty", "openai");
-    let gateway = endpoint_of(&store, "gateway", "litellm");
-    for (name, endpoint) in [
-        ("agreeing-a", &agreeing),
-        ("agreeing-b", &agreeing),
-        ("agreeing-removed", &agreeing),
-        ("mixed-local", &mixed),
-        ("mixed-external", &mixed),
-        ("undeclared-only", &undeclared),
-    ] {
-        model_on(&store, name, endpoint, "unknown");
-    }
-    model_on(&store, "route-external", &gateway, "external");
-    model_on(&store, "route-local", &gateway, "operator_network");
-    let removed = store
-        .model_profile_by_name("agreeing-removed")
-        .unwrap()
-        .unwrap();
-    store.remove_model_profile(&removed.id).unwrap();
-    drop(store);
-    as_before_server_destinations(
-        &directory,
-        &[
-            ("agreeing-a", "operator_network"),
-            ("agreeing-b", "operator_network"),
-            // A removed model keeps its row for accepted jobs and must not
-            // count towards its old server's declaration.
-            (&format!("removed-{}", removed.id), "external"),
-            ("mixed-local", "operator_network"),
-            ("mixed-external", "external"),
-        ],
-    );
-    let before = routes(&directory);
-
+    db.execute(
+        "UPDATE endpoints SET data_destination='unknown' WHERE name='mixed'",
+        [],
+    )
+    .unwrap();
+    drop(db);
     let store = reopen(&directory);
-    assert_eq!(
-        routes(&directory),
-        before,
-        "no destination or revision moved"
-    );
-    let model = |name: &str| store.model_profile_by_name(name).unwrap().unwrap();
-    let server = |endpoint: &Endpoint| {
-        store
-            .list_endpoints()
-            .unwrap()
-            .into_iter()
-            .find(|item| item.id == endpoint.id)
-            .unwrap()
-            .data_destination
-    };
-    // Its models agreed, so the server declares it and they inherit it.
-    assert_eq!(server(&agreeing).as_deref(), Some("operator_network"));
-    for name in ["agreeing-a", "agreeing-b"] {
-        assert_eq!(model(name).data_destination, "operator_network");
-        assert_eq!(model(name).data_destination_source, "endpoint");
-    }
-    // They disagreed: nothing is chosen for the operator, and each keeps its own.
-    assert_eq!(server(&mixed).as_deref(), Some("unknown"));
-    assert_eq!(model("mixed-local").data_destination, "operator_network");
-    assert_eq!(model("mixed-external").data_destination, "external");
-    assert_eq!(model("mixed-local").data_destination_source, "profile");
-    // Unknown stays unknown; a server without models declares nothing.
-    assert_eq!(server(&undeclared).as_deref(), Some("unknown"));
-    assert_eq!(model("undeclared-only").data_destination, "unknown");
-    assert_eq!(model("undeclared-only").data_destination_source, "endpoint");
-    assert_eq!(server(&empty).as_deref(), Some("unknown"));
-    // Gateway routes keep one declaration each.
-    assert_eq!(server(&gateway), None);
-    assert_eq!(model("route-external").data_destination, "external");
-    assert_eq!(model("route-local").data_destination, "operator_network");
-    assert_eq!(model("route-local").data_destination_source, "profile");
-    // Opening again changes nothing.
-    drop(store);
-    let store = reopen(&directory);
-    assert_eq!(routes(&directory), before);
+    let local = store.model_profile_by_name("mixed-local").unwrap().unwrap();
+    assert_eq!(local.data_destination, "operator_network");
+    assert_eq!(local.data_destination_source, "profile");
 
     // Declaring the mixed server applies to every model on it, and moves the
     // routing revision only of the model whose destination changed.
@@ -348,6 +263,43 @@ fn models_on_a_server_inherit_its_destination_and_cannot_contradict_it() {
         refused.to_string().contains("not declared yet"),
         "{refused}"
     );
+    // Asked to, it declares the server in the same change, and a refused
+    // model leaves the server as it was.
+    let declaring = |name: &str| -> CreateModelProfile {
+        serde_json::from_value(json!({
+            "name": name, "endpoint_id": undeclared.id, "model_id": "x",
+            "context_tokens": 8192, "max_output_tokens": 1024, "uses": ["durable"],
+            "wake_policy": "never", "data_destination": "operator_network",
+            "declare_server": true
+        }))
+        .unwrap()
+    };
+    store
+        .create_model_profile(&declaring("undeclared-a"))
+        .unwrap_err();
+    let server = |store: &Store| {
+        store
+            .list_endpoints()
+            .unwrap()
+            .into_iter()
+            .find(|endpoint| endpoint.id == undeclared.id)
+            .unwrap()
+            .data_destination
+    };
+    assert_eq!(server(&store).as_deref(), Some("unknown"));
+    store
+        .create_model_profile(&declaring("undeclared-b"))
+        .unwrap();
+    assert_eq!(server(&store).as_deref(), Some("operator_network"));
+    assert!(
+        store
+            .list_model_profiles()
+            .unwrap()
+            .iter()
+            .filter(|profile| profile.endpoint_id == undeclared.id)
+            .all(|profile| profile.data_destination == "operator_network"
+                && profile.data_destination_source == "endpoint")
+    );
 }
 
 #[test]
@@ -375,7 +327,9 @@ fn repointing_or_rekeying_a_server_follows_the_route_rules() {
         api_key: "private-key".into(),
         managed_identity: Default::default(),
     };
-    store.update_endpoint(&endpoint.id, &input).unwrap();
+    store
+        .update_endpoint_with_destination(&endpoint.id, &input, None)
+        .unwrap();
     assert_eq!(
         store
             .model_profile(&model.id)
@@ -387,7 +341,9 @@ fn repointing_or_rekeying_a_server_follows_the_route_rules() {
     // Rotating the key moves nothing: same kind, same address, same place the
     // data goes. It used to reset every profile on the endpoint.
     input.api_key = "rotated-key".into();
-    store.update_endpoint(&endpoint.id, &input).unwrap();
+    store
+        .update_endpoint_with_destination(&endpoint.id, &input, None)
+        .unwrap();
     assert_eq!(
         store
             .model_profile(&model.id)
@@ -400,7 +356,7 @@ fn repointing_or_rekeying_a_server_follows_the_route_rules() {
     // server's models keep inheriting.
     input.base_url = "http://localhost:9090/v1".into();
     let repointed = store
-        .update_endpoint(&endpoint.id, &input)
+        .update_endpoint_with_destination(&endpoint.id, &input, None)
         .unwrap()
         .unwrap();
     assert_eq!(repointed.data_destination.as_deref(), Some("unknown"));
@@ -474,8 +430,11 @@ fn idempotency_replays_identical_input_and_rejects_different_input() {
         harness_profile_id: "pi".into(),
         prompt: "change it".into(),
     };
-    let first = store.submit_job(&input).unwrap();
-    assert_eq!(first.id, store.submit_job(&input).unwrap().id);
+    let first = store.submit_job_for(&input, None, u32::MAX).unwrap();
+    assert_eq!(
+        first.id,
+        store.submit_job_for(&input, None, u32::MAX).unwrap().id
+    );
     let changed = SubmitJob {
         source: None,
         prompt: "different".into(),
@@ -483,7 +442,7 @@ fn idempotency_replays_identical_input_and_rejects_different_input() {
     };
     assert!(
         store
-            .submit_job(&changed)
+            .submit_job_for(&changed, None, u32::MAX)
             .unwrap_err()
             .to_string()
             .contains("idempotency")
@@ -495,15 +454,19 @@ fn runner_claim_is_atomic_and_completion_is_durable() {
     let (_directory, store) = store();
     let (_, model, project) = configured(&store);
     let job = store
-        .submit_job(&SubmitJob {
-            source: None,
-            idempotency_key: "claim".into(),
-            policy: Default::default(),
-            project_id: project.id,
-            model_profile_id: model.id,
-            harness_profile_id: "pi".into(),
-            prompt: "change it".into(),
-        })
+        .submit_job_for(
+            &SubmitJob {
+                source: None,
+                idempotency_key: "claim".into(),
+                policy: Default::default(),
+                project_id: project.id,
+                model_profile_id: model.id,
+                harness_profile_id: "pi".into(),
+                prompt: "change it".into(),
+            },
+            None,
+            u32::MAX,
+        )
         .unwrap();
     store
         .set_job_status(&job.id, "ready", "ready", "ready")
@@ -530,10 +493,6 @@ fn runner_claim_is_atomic_and_completion_is_durable() {
         .unwrap();
     assert_eq!(store.job(&job.id).unwrap().unwrap().status, "completed");
     assert!(store.job(&job.id).unwrap().unwrap().result.is_some());
-    assert!(
-        store.list_jobs(10).unwrap()[0].result.is_none(),
-        "job lists must not carry retained patches or output"
-    );
 }
 
 #[test]
@@ -542,15 +501,19 @@ fn claim_stores_the_runner_reported_wall_budget_and_deadline() {
     let (_, model, project) = configured(&store);
     let submit = |key: &str| {
         store
-            .submit_job(&SubmitJob {
-                source: None,
-                idempotency_key: key.into(),
-                policy: Default::default(),
-                project_id: project.id.clone(),
-                model_profile_id: model.id.clone(),
-                harness_profile_id: "pi".into(),
-                prompt: "change it".into(),
-            })
+            .submit_job_for(
+                &SubmitJob {
+                    source: None,
+                    idempotency_key: key.into(),
+                    policy: Default::default(),
+                    project_id: project.id.clone(),
+                    model_profile_id: model.id.clone(),
+                    harness_profile_id: "pi".into(),
+                    prompt: "change it".into(),
+                },
+                None,
+                u32::MAX,
+            )
             .unwrap()
     };
     let known = submit("wall-known");
@@ -589,15 +552,19 @@ fn occupying_jobs_are_preparing_ready_or_running() {
     let (_directory, store) = store();
     let (_, model, project) = configured(&store);
     let job = store
-        .submit_job(&SubmitJob {
-            source: None,
-            idempotency_key: "occupy".into(),
-            policy: Default::default(),
-            project_id: project.id,
-            model_profile_id: model.id,
-            harness_profile_id: "pi".into(),
-            prompt: "change it".into(),
-        })
+        .submit_job_for(
+            &SubmitJob {
+                source: None,
+                idempotency_key: "occupy".into(),
+                policy: Default::default(),
+                project_id: project.id,
+                model_profile_id: model.id,
+                harness_profile_id: "pi".into(),
+                prompt: "change it".into(),
+            },
+            None,
+            u32::MAX,
+        )
         .unwrap();
     assert!(store.occupying_jobs().unwrap().is_empty());
     store
@@ -612,12 +579,15 @@ fn inventory_survives_disconnect_restart_and_legacy_heartbeats() {
     let report =
         json!({"schema_version":1,"collected_at":"2026-09-08T12:00:00Z","gpus":[{"vendor":"AMD"}]});
     let node = store
-        .enroll_node(&EnrollNode {
-            token: store.create_enrollment_token(15, None).unwrap(),
-            name: "inventory-node".into(),
-            platform: "linux".into(),
-            capabilities: json!({"inventory":report,"runtimes":["ready"]}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token: store.create_enrollment_token(15, None).unwrap(),
+                name: "inventory-node".into(),
+                platform: "linux".into(),
+                capabilities: json!({"inventory":report,"runtimes":["ready"]}),
+            },
+            15,
+        )
         .unwrap();
     store
         .heartbeat_node(&node.node_id, "linux", &json!({"runtimes":["legacy"]}))
@@ -646,12 +616,15 @@ fn inventory_survives_disconnect_restart_and_legacy_heartbeats() {
         .create_enrollment_token(15, Some("inventory-node"))
         .unwrap();
     store
-        .enroll_node(&EnrollNode {
-            token,
-            name: "inventory-node".into(),
-            platform: "linux".into(),
-            capabilities: json!({}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token,
+                name: "inventory-node".into(),
+                platform: "linux".into(),
+                capabilities: json!({}),
+            },
+            15,
+        )
         .unwrap();
     assert_eq!(
         store.node(&node.node_id, 30).unwrap().unwrap().capabilities["inventory"],
@@ -689,13 +662,13 @@ fn enrollment_tokens_are_single_use_and_actions_are_typed() {
         platform: "linux".into(),
         capabilities: json!({"runtimes":["local"]}),
     };
-    let enrolled = store.enroll_node(&request).unwrap();
+    let enrolled = store.enroll_node_with_offline(&request, 15).unwrap();
     assert!(
         store
             .authenticate_node(&enrolled.node_id, &enrolled.credential)
             .unwrap()
     );
-    assert!(store.enroll_node(&request).is_err());
+    assert!(store.enroll_node_with_offline(&request, 15).is_err());
     let action = store
         .enqueue_action(
             &enrolled.node_id,
@@ -723,12 +696,15 @@ fn enrollment_tokens_are_single_use_and_actions_are_typed() {
 fn reenrollment_preserves_node_identity_and_rotates_the_credential() {
     let (directory, store) = store();
     let first = store
-        .enroll_node(&EnrollNode {
-            token: store.create_enrollment_token(15, None).unwrap(),
-            name: "worker".into(),
-            platform: "linux".into(),
-            capabilities: json!({"runtimes":["old"]}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token: store.create_enrollment_token(15, None).unwrap(),
+                name: "worker".into(),
+                platform: "linux".into(),
+                capabilities: json!({"runtimes":["old"]}),
+            },
+            15,
+        )
         .unwrap();
     let stale = store
         .enqueue_action(
@@ -746,12 +722,15 @@ fn reenrollment_preserves_node_identity_and_rotates_the_credential() {
         )
         .unwrap();
     let second = store
-        .enroll_node(&EnrollNode {
-            token: store.create_enrollment_token(15, Some("worker")).unwrap(),
-            name: "worker".into(),
-            platform: "linux".into(),
-            capabilities: json!({"runtimes":["new"]}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token: store.create_enrollment_token(15, Some("worker")).unwrap(),
+                name: "worker".into(),
+                platform: "linux".into(),
+                capabilities: json!({"runtimes":["new"]}),
+            },
+            15,
+        )
         .unwrap();
 
     assert_eq!(first.node_id, second.node_id);
@@ -772,12 +751,15 @@ fn reenrollment_preserves_node_identity_and_rotates_the_credential() {
 fn live_enrollment_keeps_the_token_and_survives_heartbeats() {
     let (directory, store) = store();
     let first = store
-        .enroll_node(&EnrollNode {
-            token: store.create_enrollment_token(15, None).unwrap(),
-            name: "worker".into(),
-            platform: "linux".into(),
-            capabilities: json!({}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token: store.create_enrollment_token(15, None).unwrap(),
+                name: "worker".into(),
+                platform: "linux".into(),
+                capabilities: json!({}),
+            },
+            15,
+        )
         .unwrap();
     let token = store.create_enrollment_token(15, Some("worker")).unwrap();
     let request = EnrollNode {
@@ -797,7 +779,7 @@ fn live_enrollment_keeps_the_token_and_survives_heartbeats() {
         }
     });
     for _ in 0..8 {
-        let error = store.enroll_node(&request).unwrap_err();
+        let error = store.enroll_node_with_offline(&request, 15).unwrap_err();
         assert!(
             error.to_string().contains("already enrolled and reachable"),
             "{error:#}"
@@ -811,7 +793,7 @@ fn live_enrollment_keeps_the_token_and_survives_heartbeats() {
             [&first.node_id],
         )
         .unwrap();
-    let second = store.enroll_node(&request).unwrap();
+    let second = store.enroll_node_with_offline(&request, 15).unwrap();
     assert_eq!(second.node_id, first.node_id);
 }
 
@@ -824,22 +806,18 @@ fn api_tokens_are_named_scoped_hashed_and_revocable() {
             permissions: vec!["models:read".into()],
         })
         .unwrap();
-    assert!(
-        store
-            .api_token_has_permission(&issued.token, "models:read")
-            .unwrap()
-    );
     let principal = store
-        .authenticate_api_token(&issued.token, "models:read")
+        .authenticate_api_token(&issued.token, Some("models:read"))
         .unwrap()
         .unwrap();
     assert_eq!(principal.id, issued.details.id);
     assert_eq!(principal.name, "Test editor");
     assert_eq!(principal.permissions, vec!["models:read"]);
     assert!(
-        !store
-            .api_token_has_permission(&issued.token, "inference:invoke")
+        store
+            .authenticate_api_token(&issued.token, Some("inference:invoke"))
             .unwrap()
+            .is_none()
     );
     let database = std::fs::read(directory.path().join("state.sqlite3")).unwrap();
     assert!(
@@ -849,13 +827,8 @@ fn api_tokens_are_named_scoped_hashed_and_revocable() {
     );
     assert!(store.revoke_api_token(&issued.details.id).unwrap());
     assert!(
-        !store
-            .api_token_has_permission(&issued.token, "models:read")
-            .unwrap()
-    );
-    assert!(
         store
-            .authenticate_api_token(&issued.token, "models:read")
+            .authenticate_api_token(&issued.token, Some("models:read"))
             .unwrap()
             .is_none()
     );
@@ -874,13 +847,13 @@ fn a_tokens_last_use_is_refreshed_once_per_window_not_per_request() {
     assert_eq!(last_used(), None);
 
     store
-        .authenticate_api_token(&issued.token, "inference:invoke")
+        .authenticate_api_token(&issued.token, Some("inference:invoke"))
         .unwrap()
         .unwrap();
     let first = last_used().expect("the first use is recorded");
     std::thread::sleep(std::time::Duration::from_millis(20));
     store
-        .authenticate_api_token(&issued.token, "inference:invoke")
+        .authenticate_api_token(&issued.token, Some("inference:invoke"))
         .unwrap()
         .unwrap();
     assert_eq!(last_used(), Some(first), "no write inside the window");
@@ -894,7 +867,7 @@ fn a_tokens_last_use_is_refreshed_once_per_window_not_per_request() {
         )
         .unwrap();
     store
-        .authenticate_api_token(&issued.token, "inference:invoke")
+        .authenticate_api_token(&issued.token, Some("inference:invoke"))
         .unwrap()
         .unwrap();
     assert!(last_used().unwrap() > stale, "a stale value is refreshed");
@@ -907,12 +880,15 @@ fn a_single_node_lookup_matches_its_row_in_the_listing() {
         .iter()
         .map(|name| {
             store
-                .enroll_node(&EnrollNode {
-                    token: store.create_enrollment_token(15, None).unwrap(),
-                    name: (*name).into(),
-                    platform: "linux".into(),
-                    capabilities: json!({"inventory":{"name":name}}),
-                })
+                .enroll_node_with_offline(
+                    &EnrollNode {
+                        token: store.create_enrollment_token(15, None).unwrap(),
+                        name: (*name).into(),
+                        platform: "linux".into(),
+                        capabilities: json!({"inventory":{"name":name}}),
+                    },
+                    15,
+                )
                 .unwrap()
                 .node_id
         })
@@ -977,7 +953,7 @@ fn routing_revision_changes_only_with_the_route() {
     assert_eq!(profile_revision, store.routing_revision(&resaved).unwrap());
 
     store
-        .update_endpoint(
+        .update_endpoint_with_destination(
             &endpoint.id,
             &CreateEndpoint {
                 name: endpoint.name,
@@ -986,6 +962,7 @@ fn routing_revision_changes_only_with_the_route() {
                 api_key: "replacement-key".into(),
                 managed_identity: Default::default(),
             },
+            None,
         )
         .unwrap();
     let current = store.model_profile(&model.id).unwrap().unwrap();
@@ -1024,15 +1001,19 @@ fn last_check_is_persisted_without_secrets() {
 fn submit(store: &Store) -> Job {
     let (_, model, project) = configured(store);
     store
-        .submit_job(&SubmitJob {
-            source: None,
-            idempotency_key: "regression".into(),
-            policy: Default::default(),
-            project_id: project.id,
-            model_profile_id: model.id,
-            harness_profile_id: "pi".into(),
-            prompt: "change it".into(),
-        })
+        .submit_job_for(
+            &SubmitJob {
+                source: None,
+                idempotency_key: "regression".into(),
+                policy: Default::default(),
+                project_id: project.id,
+                model_profile_id: model.id,
+                harness_profile_id: "pi".into(),
+                prompt: "change it".into(),
+            },
+            None,
+            u32::MAX,
+        )
         .unwrap()
 }
 
@@ -1042,7 +1023,7 @@ fn accepted_configuration_survives_edits_and_restart_without_plaintext_secrets()
     let job = submit(&store);
     let package = store.runner_package(&job.id).unwrap().unwrap();
     store
-        .update_endpoint(
+        .update_endpoint_with_destination(
             &package.model.endpoint_id,
             &CreateEndpoint {
                 name: package.endpoint.endpoint.name.clone(),
@@ -1051,6 +1032,7 @@ fn accepted_configuration_survives_edits_and_restart_without_plaintext_secrets()
                 api_key: package.endpoint.api_key.clone(),
                 managed_identity: Default::default(),
             },
+            None,
         )
         .unwrap();
     store
@@ -1128,7 +1110,7 @@ fn concurrent_replays_accept_exactly_one_job_and_one_event() {
             let input = input.clone();
             std::thread::spawn(move || {
                 store
-                    .submit_job(&serde_json::from_str(&input).unwrap())
+                    .submit_job_for(&serde_json::from_str(&input).unwrap(), None, u32::MAX)
                     .unwrap()
                     .id
             })
@@ -1241,9 +1223,12 @@ fn supplied_source_is_encrypted_separate_and_available_only_with_a_live_lease() 
         harness_profile_id: "pi".into(),
         prompt: "Change it".into(),
     };
-    let job = store.submit_job(&input).unwrap();
+    let job = store.submit_job_for(&input, None, u32::MAX).unwrap();
     assert!(job.project_id.is_none());
-    assert_eq!(job.id, store.submit_job(&input).unwrap().id);
+    assert_eq!(
+        job.id,
+        store.submit_job_for(&input, None, u32::MAX).unwrap().id
+    );
     let package = store.runner_package(&job.id).unwrap().unwrap();
     assert_eq!(package.source, Some(source.summary()));
     assert!(
@@ -1315,7 +1300,9 @@ fn every_way_a_job_ends_removes_its_source() {
         cleanup: json!({}),
     };
     let claimed = |key: &str| {
-        let job = store.submit_job(&git_job(&model, key)).unwrap();
+        let job = store
+            .submit_job_for(&git_job(&model, key), None, u32::MAX)
+            .unwrap();
         store
             .set_job_status(&job.id, "ready", "ready", "Ready")
             .unwrap();
@@ -1333,7 +1320,9 @@ fn every_way_a_job_ends_removes_its_source() {
     let cancelled = claimed("cancelled");
     store.request_cancel(&cancelled.id).unwrap();
     store.complete_job(&cancelled.id, &result).unwrap();
-    let unclaimed = store.submit_job(&git_job(&model, "unclaimed")).unwrap();
+    let unclaimed = store
+        .submit_job_for(&git_job(&model, "unclaimed"), None, u32::MAX)
+        .unwrap();
     store
         .fail_job(&unclaimed.id, json!({"code":"cancelled_before_run"}), true)
         .unwrap();
@@ -1346,7 +1335,9 @@ fn every_way_a_job_ends_removes_its_source() {
         )
         .unwrap();
     assert_eq!(store.fail_expired_runners().unwrap(), vec![lost.id.clone()]);
-    let waiting = store.submit_job(&git_job(&model, "waiting")).unwrap();
+    let waiting = store
+        .submit_job_for(&git_job(&model, "waiting"), None, u32::MAX)
+        .unwrap();
 
     for (job, status) in [
         (&completed, "completed"),
@@ -1362,7 +1353,13 @@ fn every_way_a_job_ends_removes_its_source() {
         );
         // Replaying the submission still returns the finished job.
         let key = job.idempotency_key.as_str();
-        assert_eq!(store.submit_job(&git_job(&model, key)).unwrap().id, job.id);
+        assert_eq!(
+            store
+                .submit_job_for(&git_job(&model, key), None, u32::MAX)
+                .unwrap()
+                .id,
+            job.id
+        );
     }
     assert!(source_stored(&directory, &waiting.id));
     // An ending is recorded with its result, which is what removes the source.
@@ -1370,32 +1367,6 @@ fn every_way_a_job_ends_removes_its_source() {
         assert!(store.set_job_status(&waiting.id, status, "x", "x").is_err());
     }
     assert!(source_stored(&directory, &waiting.id));
-}
-
-#[test]
-fn opening_the_store_removes_sources_kept_by_jobs_that_already_ended() {
-    let (directory, store) = store();
-    let (_, model, _) = configured(&store);
-    let ended = store.submit_job(&git_job(&model, "ended")).unwrap();
-    let waiting = store.submit_job(&git_job(&model, "waiting")).unwrap();
-    // How a job ended before endings removed the source.
-    rusqlite::Connection::open(directory.path().join("state.sqlite3"))
-        .unwrap()
-        .execute(
-            "UPDATE jobs SET status='completed' WHERE id=?1",
-            [&ended.id],
-        )
-        .unwrap();
-    drop(store);
-    assert!(source_stored(&directory, &ended.id));
-
-    let store = reopen(&directory);
-    assert!(!source_stored(&directory, &ended.id));
-    assert!(source_stored(&directory, &waiting.id));
-    assert_eq!(
-        store.submit_job(&git_job(&model, "ended")).unwrap().id,
-        ended.id
-    );
 }
 
 #[test]
@@ -1440,74 +1411,19 @@ fn a_token_holds_a_bounded_number_of_unfinished_jobs() {
 }
 
 #[test]
-fn old_required_project_schema_migrates_without_losing_jobs_or_events() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("state.sqlite3");
-    let db = rusqlite::Connection::open(&path).unwrap();
-    db.execute_batch(&include_str!("../migrations/schema.sql").replace(
-        "project_id TEXT REFERENCES",
-        "project_id TEXT NOT NULL REFERENCES",
-    ))
-    .unwrap();
-    drop(db);
-    let secrets = SecretBox::load_or_create(&directory.path().join("master-key")).unwrap();
-    let store = Store::open(&path, secrets.clone()).unwrap();
-    let (_, model, project) = configured(&store);
-    let job = store
-        .submit_job(&SubmitJob {
-            project_id: project.id,
-            source: None,
-            idempotency_key: "legacy".into(),
-            policy: Default::default(),
-            model_profile_id: model.id,
-            harness_profile_id: "pi".into(),
-            prompt: "change".into(),
-        })
-        .unwrap();
-    drop(store);
-    // Rebuild the populated jobs table with the old NOT NULL constraint.
-    let db = rusqlite::Connection::open(&path).unwrap();
-    db.pragma_update(None, "foreign_keys", false).unwrap();
-    db.execute_batch(&include_str!("../migrations/job-source.sql").replace(
-        "project_id TEXT REFERENCES",
-        "project_id TEXT NOT NULL REFERENCES",
-    ))
-    .unwrap();
-    drop(db);
-    let store = Store::open(&path, secrets).unwrap();
-    assert_eq!(store.job(&job.id).unwrap().unwrap().prompt, "change");
-    assert_eq!(store.events(&job.id, 0).unwrap().len(), 1);
-    assert!(store.runner_package(&job.id).unwrap().is_some());
-    let db = rusqlite::Connection::open(&path).unwrap();
-    assert_eq!(
-        db.query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |row| {
-            row.get::<_, i64>(0)
-        })
-        .unwrap(),
-        0
-    );
-    assert_eq!(
-        db.query_row(
-            "SELECT \"notnull\" FROM pragma_table_info('jobs') WHERE name='project_id'",
-            [],
-            |row| row.get::<_, i64>(0)
-        )
-        .unwrap(),
-        0
-    );
-}
-
-#[test]
 fn ending_a_runtime_lease_fences_only_unclaimed_work_and_late_renewals() {
     let (directory, store) = store();
     let token = store.create_enrollment_token(15, None).unwrap();
     let node = store
-        .enroll_node(&EnrollNode {
-            token,
-            name: "runtime-fencing".into(),
-            platform: "linux".into(),
-            capabilities: json!({}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token,
+                name: "runtime-fencing".into(),
+                platform: "linux".into(),
+                capabilities: json!({}),
+            },
+            15,
+        )
         .unwrap();
     let action = |kind: &str, lease: &str| {
         store
@@ -1534,7 +1450,13 @@ fn ending_a_runtime_lease_fences_only_unclaimed_work_and_late_renewals() {
     assert_eq!(store.action(&other.id).unwrap().unwrap().status, "pending");
     assert_eq!(action("renew", "abandoned").status, "failed");
     assert_eq!(action("ensure", "abandoned").status, "failed");
-    // Simulate an older controller's queued action or an interrupted running action.
+    // The node finishes what it was handed before it polls again.
+    assert!(
+        store
+            .complete_node_action(&node.node_id, &running.id, true, json!({}))
+            .unwrap()
+    );
+    // Simulate an older controller's queued action, or one whose poll was cut.
     rusqlite::Connection::open(directory.path().join("state.sqlite3")).unwrap().execute(
         "UPDATE node_actions SET status='running',updated_at='2000-01-01T00:00:00Z' WHERE id=?1", [&abandoned.id]).unwrap();
     assert_eq!(
@@ -1545,23 +1467,21 @@ fn ending_a_runtime_lease_fences_only_unclaimed_work_and_late_renewals() {
         store.action(&abandoned.id).unwrap().unwrap().status,
         "failed"
     );
-    assert!(
-        store
-            .complete_node_action(&node.node_id, &running.id, true, json!({}))
-            .unwrap()
-    );
 }
 
 #[test]
 fn node_maintenance_and_revocation_fence_work_and_credentials() {
     let (_directory, store) = store();
     let enrolled = store
-        .enroll_node(&EnrollNode {
-            token: store.create_enrollment_token(15, None).unwrap(),
-            name: "linux-node".into(),
-            platform: "linux".into(),
-            capabilities: json!({}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token: store.create_enrollment_token(15, None).unwrap(),
+                name: "linux-node".into(),
+                platform: "linux".into(),
+                capabilities: json!({}),
+            },
+            15,
+        )
         .unwrap();
     let id = &enrolled.node_id;
     let payload = json!({"lease_id":"active-lease","runtime_profile":"ready"});
@@ -1620,14 +1540,17 @@ fn node_maintenance_and_revocation_fence_work_and_credentials() {
         "failed"
     );
     let renewed = store
-        .enroll_node(&EnrollNode {
-            token: store
-                .create_enrollment_token(15, Some("linux-node"))
-                .unwrap(),
-            name: "linux-node".into(),
-            platform: "linux".into(),
-            capabilities: json!({}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token: store
+                    .create_enrollment_token(15, Some("linux-node"))
+                    .unwrap(),
+                name: "linux-node".into(),
+                platform: "linux".into(),
+                capabilities: json!({}),
+            },
+            15,
+        )
         .unwrap();
     assert_eq!(renewed.node_id, *id);
     assert!(store.authenticate_node(id, &renewed.credential).unwrap());
@@ -1644,18 +1567,20 @@ fn job_checks_are_frozen_persisted_and_part_of_idempotency() {
         "model_profile_id":model.id,"harness_profile_id":"pi","prompt":"Fix the calculation.",
         "policy":{"verification":{"commands":[{"command":"python3 -m unittest","timeout_seconds":60}],"protected_paths":["tests"]},"max_repairs":2}
     })).unwrap();
-    let job = store.submit_job(&input).unwrap();
+    let job = store.submit_job_for(&input, None, u32::MAX).unwrap();
     assert_eq!(store.job(&job.id).unwrap().unwrap().policy, input.policy);
-    assert_eq!(store.list_jobs(10).unwrap()[0].policy, input.policy);
     assert_eq!(
         store.runner_package(&job.id).unwrap().unwrap().job.policy,
         input.policy
     );
-    assert_eq!(store.submit_job(&input).unwrap().id, job.id);
+    assert_eq!(
+        store.submit_job_for(&input, None, u32::MAX).unwrap().id,
+        job.id
+    );
     input.policy.max_repairs = 1;
     assert!(
         store
-            .submit_job(&input)
+            .submit_job_for(&input, None, u32::MAX)
             .unwrap_err()
             .to_string()
             .contains("idempotency")
@@ -1675,12 +1600,15 @@ fn job_checks_are_frozen_persisted_and_part_of_idempotency() {
 fn expired_orphaned_actions_do_not_hold_a_registration_forever() {
     let (directory, store) = store();
     let node = store
-        .enroll_node(&EnrollNode {
-            token: store.create_enrollment_token(15, None).unwrap(),
-            name: "old-machine".into(),
-            platform: "linux".into(),
-            capabilities: json!({}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token: store.create_enrollment_token(15, None).unwrap(),
+                name: "old-machine".into(),
+                platform: "linux".into(),
+                capabilities: json!({}),
+            },
+            15,
+        )
         .unwrap();
     let payload = json!({"lease_id":"old-lease", "runtime_profile":"ready"});
     let action = store
@@ -1709,15 +1637,19 @@ fn expired_orphaned_actions_do_not_hold_a_registration_forever() {
     db.execute("UPDATE node_actions SET created_at='2000-01-02T00:00:00Z',updated_at='2000-01-02T00:00:00Z' WHERE id=?1", [&renewal.id]).unwrap();
     let (_, model, project) = configured(&store);
     let job = store
-        .submit_job(&SubmitJob {
-            idempotency_key: "live-job-with-old-action".into(),
-            project_id: project.id,
-            model_profile_id: model.id,
-            harness_profile_id: "pi".into(),
-            prompt: "Work".into(),
-            source: None,
-            policy: Default::default(),
-        })
+        .submit_job_for(
+            &SubmitJob {
+                idempotency_key: "live-job-with-old-action".into(),
+                project_id: project.id,
+                model_profile_id: model.id,
+                harness_profile_id: "pi".into(),
+                prompt: "Work".into(),
+                source: None,
+                policy: Default::default(),
+            },
+            None,
+            u32::MAX,
+        )
         .unwrap();
     db.execute(
         "UPDATE node_actions SET job_id=?1 WHERE id=?2",
@@ -1775,57 +1707,6 @@ fn removed_configuration_preserves_accepted_jobs_and_frees_display_names() {
     assert_eq!(after.endpoint.api_key, before.endpoint.api_key);
     assert_eq!(after.project.roots, before.project.roots);
     assert_eq!(after.job.id, before.job.id);
-}
-
-#[test]
-fn model_profile_uses_backfills_from_workload_class_on_legacy_databases() {
-    let directory = tempfile::tempdir().unwrap();
-    let path = directory.path().join("state.sqlite3");
-    let db = rusqlite::Connection::open(&path).unwrap();
-    db.execute_batch(&include_str!("../migrations/schema.sql").replace(
-        "  revision_nonce TEXT NOT NULL DEFAULT '',\n  uses_json TEXT NOT NULL DEFAULT '[\"durable\"]'\n",
-        "  revision_nonce TEXT NOT NULL DEFAULT ''\n",
-    ))
-    .unwrap();
-    db.execute(
-        "INSERT INTO endpoints (id,name,kind,base_url,api_key_ciphertext,created_at,revision_nonce)
-         VALUES ('endpoint','endpoint','openai','http://localhost/v1','','now','')",
-        [],
-    )
-    .unwrap();
-    for (id, class) in [
-        ("interactive", "interactive-coding"),
-        ("durable", "durable-coding-agent"),
-        ("completion", "fast-code-completion"),
-        ("unrecognized", "something-else"),
-    ] {
-        db.execute(
-            "INSERT INTO model_profiles
-             (id,name,endpoint_id,model_id,context_tokens,max_output_tokens,workload_class,wake_policy,created_at)
-             VALUES (?1,?1,'endpoint','model',8192,1024,?2,'never','now')",
-            rusqlite::params![id, class],
-        )
-        .unwrap();
-    }
-    drop(db);
-    let secrets = SecretBox::load_or_create(&directory.path().join("master-key")).unwrap();
-    let store = Store::open(&path, secrets).unwrap();
-    let profiles = store.list_model_profiles().unwrap();
-    let uses = |id: &str| -> Vec<String> {
-        profiles
-            .iter()
-            .find(|profile| profile.id == id)
-            .unwrap()
-            .uses
-            .iter()
-            .cloned()
-            .collect::<Vec<_>>()
-    };
-    assert_eq!(uses("interactive"), vec!["interactive".to_string()]);
-    assert_eq!(uses("durable"), vec!["durable".to_string()]);
-    assert_eq!(uses("completion"), vec!["completion".to_string()]);
-    // Unrecognized legacy values fall back to the same default as a fresh column.
-    assert_eq!(uses("unrecognized"), vec!["durable".to_string()]);
 }
 
 #[test]
@@ -2200,7 +2081,7 @@ fn capabilities_do_not_survive_a_route_change() {
     // Re-pointing the endpoint moves the route of every profile on it.
     assert_eq!(measured(&store).capabilities.len(), 1);
     store
-        .update_endpoint(
+        .update_endpoint_with_destination(
             &_endpoint.id,
             &serde_json::from_value(json!({
                 "name": _endpoint.name,
@@ -2209,6 +2090,7 @@ fn capabilities_do_not_survive_a_route_change() {
                 "api_key": "k",
             }))
             .unwrap(),
+            None,
         )
         .unwrap()
         .unwrap();
@@ -2355,12 +2237,15 @@ fn a_default_thinking_budget_is_a_bounded_llamacpp_setting() {
     let (_, model, _) = configured(&store);
     assert_eq!(model.thinking_budget_tokens, None);
     let node = store
-        .enroll_node(&EnrollNode {
-            token: store.create_enrollment_token(15, None).unwrap(),
-            name: "orion".into(),
-            platform: "linux".into(),
-            capabilities: json!({}),
-        })
+        .enroll_node_with_offline(
+            &EnrollNode {
+                token: store.create_enrollment_token(15, None).unwrap(),
+                name: "orion".into(),
+                platform: "linux".into(),
+                capabilities: json!({}),
+            },
+            15,
+        )
         .unwrap()
         .node_id;
     let patch = |body: serde_json::Value| {

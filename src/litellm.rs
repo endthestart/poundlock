@@ -726,15 +726,11 @@ pub(crate) fn validate_policy(policy: &ManagedIdentityPolicy) -> Result<()> {
             "budget period must be daily, weekly or monthly"
         );
     }
-    for (name, value) in [("duration", policy.duration.as_deref())] {
-        if let Some(value) = value {
-            ensure!(
-                !value.trim().is_empty()
-                    && value.len() <= 32
-                    && !value.chars().any(char::is_control),
-                "{name} must contain 1 to 32 characters without control characters"
-            );
-        }
+    if let Some(value) = policy.duration.as_deref() {
+        ensure!(
+            !value.trim().is_empty() && value.len() <= 32 && !value.chars().any(char::is_control),
+            "duration must contain 1 to 32 characters without control characters"
+        );
     }
     ensure!(policy.rpm_limit != Some(0), "rpm_limit must be positive");
     ensure!(policy.tpm_limit != Some(0), "tpm_limit must be positive");
@@ -755,7 +751,7 @@ fn short_id(value: &str) -> &str {
     value.get(..12).unwrap_or(value)
 }
 
-fn management_url(base_url: &str, path: &str) -> Result<Url> {
+pub(crate) fn management_url(base_url: &str, path: &str) -> Result<Url> {
     let mut url = Url::parse(base_url).context("parse LiteLLM base URL")?;
     let mut segments = url
         .path_segments()
@@ -821,7 +817,7 @@ mod tests {
     ) -> axum::response::Response {
         if state
             .failures_remaining
-            .fetch_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |remaining| {
                 remaining.checked_sub(1)
             })
             .is_ok()
@@ -931,6 +927,7 @@ mod tests {
                     runtime_profile: None,
                     idle_seconds: None,
                     data_destination: "external".into(),
+                    declare_server: false,
                     thinking: "model_default".into(),
                     thinking_budget_tokens: None,
                     capabilities: Vec::new(),
@@ -953,7 +950,7 @@ mod tests {
             })
             .unwrap();
         let principal = store
-            .authenticate_api_token(&issued.token, "inference:invoke")
+            .authenticate_api_token(&issued.token, Some("inference:invoke"))
             .unwrap()
             .unwrap();
         (issued.token, principal)
@@ -1109,7 +1106,7 @@ mod tests {
         assert!(store.revoke_api_token(&principal.id).unwrap());
         assert!(
             store
-                .authenticate_api_token(&token, "inference:invoke")
+                .authenticate_api_token(&token, Some("inference:invoke"))
                 .unwrap()
                 .is_none()
         );

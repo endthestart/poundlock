@@ -10,6 +10,7 @@ from typing import List
 from uuid import uuid4
 
 from poundlock_llamacpp.errors import ConflictError, InfrastructureError, ManagerError
+from poundlock_llamacpp.manager import GENERATION_CHECK_SECONDS
 from poundlock_llamacpp.manifest import load_manifest
 
 from .fakes import (
@@ -39,8 +40,20 @@ class EnsureTests(LifecycleCase):
         self.assertEqual("http://127.0.0.1:8080", result["endpoint"])
         self.assertEqual(
             [
-                BINARY, "--model", MODEL, "--alias", ALIAS, "--ctx-size", "4096",
-                "--host", "127.0.0.1", "--port", "8080", "--parallel", "1", "--jinja",
+                BINARY,
+                "--model",
+                MODEL,
+                "--alias",
+                ALIAS,
+                "--ctx-size",
+                "4096",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                "8080",
+                "--parallel",
+                "1",
+                "--jinja",
             ],
             self.system.spawns[0],
         )
@@ -174,6 +187,17 @@ class WarmIdleTests(LifecycleCase):
         self.assertEqual("warm_window_over", stopped["last_stop_reason"])
         self.assert_nothing_running()
 
+    def test_gpus_are_found_at_start_and_passed_largest_first(self) -> None:
+        self.edit_profile(server={**profile_dict()["server"], "gpu_order": "largest_first"})
+        self.ensure()
+        command = self.system.inspect(self.system.server_pid).command
+        self.assertIn("--device MTL1,MTL0", command)
+        self.assertEqual(["MTL1", "MTL0"], [gpu["device"] for gpu in self.state()["evidence"]["gpus"]])
+
+    def test_a_profile_without_gpu_order_gets_no_device_list(self) -> None:
+        self.ensure()
+        self.assertNotIn("--device", self.system.inspect(self.system.server_pid).command)
+
     def test_a_warm_server_is_reused_by_the_next_lease(self) -> None:
         first = str(uuid4())
         self.ensure(first)
@@ -212,6 +236,32 @@ class WarmIdleTests(LifecycleCase):
         self.edit_profile(warm_seconds=900)
         self.ensure()
         self.assertEqual(2, len(self.system.spawns))
+
+    def completions(self) -> int:
+        return sum(1 for request in self.system.requests if request.endswith("/v1/chat/completions"))
+
+    def test_a_warm_server_generating_garbage_is_restarted(self) -> None:
+        self.edit_profile(warm_seconds=3600)
+        lease = str(uuid4())
+        self.ensure(lease)
+        warm_pid = self.system.server_pid
+        self.manager.release(lease, str(uuid4()))
+        self.advance(GENERATION_CHECK_SECONDS)
+        self.system.degenerate_pid = warm_pid  # /health, /v1/models and /props still pass
+        self.assertEqual("ready", self.ensure()["phase"])
+        self.assertEqual(2, len(self.system.spawns))
+        self.assertIn(warm_pid, self.system.terminated)
+
+    def test_a_warm_server_checked_recently_is_reused_without_a_completion(self) -> None:
+        self.edit_profile(warm_seconds=3600)
+        lease = str(uuid4())
+        self.ensure(lease)
+        self.manager.release(lease, str(uuid4()))
+        self.advance(GENERATION_CHECK_SECONDS - 1)
+        before = self.completions()
+        self.ensure()
+        self.assertEqual(before, self.completions())
+        self.assertEqual(1, len(self.system.spawns))
 
     def test_an_unhealthy_warm_server_is_restarted(self) -> None:
         lease = str(uuid4())
@@ -504,6 +554,11 @@ class FailedStartTests(LifecycleCase):
         result = self.ensure()
         self.assertEqual("ready", result["status"])
 
+    def test_a_replaced_server_without_argv_is_an_exit(self) -> None:
+        # macOS reports a process's command string but no argv.
+        self.system.replaced_after_spawn = True
+        self.assert_failed_cleanly("exited while loading")
+
     def test_server_dies_at_once(self) -> None:
         self.system.crash_after_spawn = True
         self.assert_failed_cleanly("exited while loading")
@@ -531,6 +586,22 @@ class FailedStartTests(LifecycleCase):
         self.system.warmup_error = True
         self.assert_failed_cleanly("warm-up request failed")
 
+    def test_no_gpu_listed_is_refused(self) -> None:
+        self.edit_profile(server={**profile_dict()["server"], "gpu_order": "largest_first"})
+        self.system.device_listing = "Available devices:\n  BLAS: Accelerate (0 MiB, 0 MiB free)\n"
+        with self.assertRaisesRegex(InfrastructureError, "found no GPU"):
+            self.ensure()
+        self.assert_nothing_running()
+
+    def test_a_server_generating_garbage_is_refused(self) -> None:
+        self.system.reply_content = "0" * 64
+        self.assert_failed_cleanly("one character repeated")
+
+    def test_a_warmed_up_server_generating_garbage_is_refused(self) -> None:
+        self.edit_profile(warmup=WARMUP)
+        self.system.reply_content = "0 " * 64
+        self.assert_failed_cleanly("one character repeated")
+
     def test_interrupt_during_load(self) -> None:
         def interrupt() -> None:
             raise KeyboardInterrupt
@@ -542,9 +613,9 @@ class FailedStartTests(LifecycleCase):
         self.assert_nothing_running()
         self.assertEqual("failed", self.state()["phase"])
 
-    def test_detached_sweeper_and_caffeinate_die_with_a_failed_start(self) -> None:
-        self.write_manifest(manifest_dict(sweeper="detached", caffeinate=True))
-        self.system.supports_caffeinate = True
+    def test_detached_sweeper_and_keep_awake_die_with_a_failed_start(self) -> None:
+        self.write_manifest(manifest_dict(sweeper="detached", keep_awake=True))
+        self.system.supports_keep_awake = True
         self.system.loading_polls = 10**9
         with self.assertRaises(InfrastructureError):
             self.ensure()
@@ -591,11 +662,20 @@ class FailedStartTests(LifecycleCase):
         self.assert_nothing_running()
         self.assertFalse((self.home / "state.json").exists())
 
-    def test_caffeinate_is_refused_where_it_does_not_exist(self) -> None:
-        self.write_manifest(manifest_dict(caffeinate=True))
-        with self.assertRaisesRegex(InfrastructureError, "only available on macOS"):
+    def test_keep_awake_is_refused_where_it_does_not_exist(self) -> None:
+        self.write_manifest(manifest_dict(keep_awake=True))
+        with self.assertRaisesRegex(InfrastructureError, "keep_awake needs"):
             self.ensure()
         self.assertEqual([], self.system.spawns)
+
+    def test_a_refused_keep_awake_block_ends_the_start(self) -> None:
+        self.write_manifest(manifest_dict(keep_awake=True))
+        self.system.supports_keep_awake = True
+        self.system.keep_awake_refused = True
+        with self.assertRaisesRegex(InfrastructureError, "keep-awake block could not be held"):
+            self.ensure()
+        self.assert_nothing_running()
+        self.assertEqual("failed", self.state()["phase"])
 
 
 class ArtifactTests(LifecycleCase):
@@ -706,14 +786,12 @@ class HelperTests(LifecycleCase):
         self.ensure()
         self.assertEqual(1, len(self.system.helpers))
 
-    def test_caffeinate_holds_the_server_pid_and_stops_with_it(self) -> None:
-        self.write_manifest(manifest_dict(caffeinate=True))
-        self.system.supports_caffeinate = True
+    def test_keep_awake_holds_the_server_pid_and_stops_with_it(self) -> None:
+        self.write_manifest(manifest_dict(keep_awake=True))
+        self.system.supports_keep_awake = True
         lease = str(uuid4())
         self.ensure(lease)
-        self.assertEqual(
-            ["caffeinate", "-dimsu", "-w", str(self.system.server_pid)], self.system.helpers[0]
-        )
+        self.assertEqual(["keep-awake", str(self.system.server_pid)], self.system.helpers[0])
         self.manager.stop(lease, str(uuid4()))
         self.assert_nothing_running()
 
@@ -820,9 +898,7 @@ class ApiKeyTests(LifecycleCase):
         self.key_file.chmod(mode)
 
     def use_key_file(self, path: Path) -> None:
-        self.edit_profile(
-            server={**profile_dict()["server"], "api_key_file": str(path)}, warmup=WARMUP
-        )
+        self.edit_profile(server={**profile_dict()["server"], "api_key_file": str(path)}, warmup=WARMUP)
 
     def server_requests(self) -> List[str]:
         return [request for request in self.system.requests if ":8080" in request]
@@ -960,4 +1036,3 @@ class DeploymentShapeTests(LifecycleCase):
         self.assertIn(lease, text)
         self.assertIn("ensure", text)
         self.assertNotIn("--jinja", text)
-

@@ -54,8 +54,9 @@ fn validate_request(body: &mut Value, package: &RunnerPackage) -> ApiResult<()> 
     let fields = body
         .as_object_mut()
         .ok_or_else(|| ApiError::bad("expected an object"))?;
-    // Do not pass gateway-specific routing, credential or destination
-    // overrides: the same list the interactive relay uses, plus nothing.
+    // Refuse gateway-specific routing, credential and destination overrides
+    // rather than strip them as the interactive relay does: a job's worker has
+    // no reason to send one.
     if let Some(unsupported) = super::relay::unsupported_option(fields, &[], &package.model) {
         return Err(ApiError::bad(format!(
             "unsupported job inference option: {unsupported}"
@@ -64,37 +65,7 @@ fn validate_request(body: &mut Value, package: &RunnerPackage) -> ApiResult<()> 
     if fields.get("model").and_then(Value::as_str) != Some(&package.model.model_id) {
         return Err(ApiError::bad("model must match the accepted job"));
     }
-    if fields.get("reasoning_effort").is_some_and(|value| {
-        !matches!(
-            value.as_str(),
-            Some("none" | "minimal" | "low" | "medium" | "high")
-        )
-    }) {
-        return Err(ApiError::bad("unsupported reasoning_effort"));
-    }
-    if let Some(message) = super::reasoning::budget_problem(fields, &package.model) {
-        return Err(ApiError::bad_code("invalid_thinking_budget", message));
-    }
-    if fields.get("n").is_some_and(|n| n.as_u64() != Some(1)) {
-        return Err(ApiError::bad("one completion per request is supported"));
-    }
-    if fields.contains_key("max_tokens") && fields.contains_key("max_completion_tokens") {
-        return Err(ApiError::bad("provide only one output token limit"));
-    }
-    let key = if fields.contains_key("max_completion_tokens") {
-        "max_completion_tokens"
-    } else {
-        "max_tokens"
-    };
-    let limit = match fields.get(key) {
-        Some(value) => value
-            .as_u64()
-            .filter(|n| *n > 0 && *n <= package.model.max_output_tokens)
-            .ok_or_else(|| ApiError::bad("output token limit exceeds the accepted model budget"))?,
-        None => package.model.max_output_tokens,
-    };
-    fields.insert(key.into(), json!(limit));
-    Ok(())
+    super::relay::constrain_request(fields, &package.model)
 }
 
 async fn revoked(state: &AppState, id: &str, token: &str) {

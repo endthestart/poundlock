@@ -1,4 +1,4 @@
-"""macOS adapter: `ps`-based ownership checks and optional caffeinate."""
+"""macOS adapter: `ps`-based ownership checks and an optional caffeinate keep-awake."""
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ class MacSystem(System):
     name = "macos"
     # launchd runs `sweep` every minute (deploy/com.poundlock.llamacpp.plist).
     default_sweeper = "external"
-    supports_caffeinate = True
+    supports_keep_awake = True
 
     def _run(self, argv: List[str]) -> Optional[str]:
         try:
@@ -58,8 +58,8 @@ class MacSystem(System):
     def default_home(self) -> Path:
         return Path.home() / "Library" / "Application Support" / "poundlock-llamacpp"
 
-    def caffeinate_command(self, server_pid: int) -> Optional[List[str]]:
-        return [CAFFEINATE, "-dimsu", "-w", str(server_pid)]
+    def keep_awake_command(self, server_pid: int) -> Optional[List[str]]:
+        return [CAFFEINATE, "-ims", "-w", str(server_pid)]
 
 
 def parse_ps_line(pid: int, output: str) -> Optional[ProcessInfo]:

@@ -68,13 +68,14 @@ Repeating them in `arguments`, or using `--api-key`, `--slots` or `LLAMA_API_KEY
 | `server.slots_endpoint` | `false` passes `--no-slots`, which turns `/slots` off; absent or `true` leaves llama-server's default. Check that `llama-server --help` lists `--no-slots` first. |
 | `server.arguments` | Extra `llama-server` options. |
 | `server.environment` | Extra environment, for example GPU selection. Values are never printed. |
+| `server.gpu_order` | `largest_first`: at every start the runtime runs `llama-server --list-devices` with the profile's environment and passes the GPUs it lists as `--device`, most memory first. Device order can change between boots, so `--tensor-split` keeps naming the same GPUs. Not with `--device` in `server.arguments` or `GGML_METAL_DEVICE_LIST` in `server.environment`. The GPUs found go in the start's evidence. |
 | `required_log_markers` | Strings that must appear in the server log, for example `creating MTP draft context`. |
 | `warmup` | Optional priming request, then one measured request. `min_tokens_per_second` fails a slow decode (a VRAM spill); `require_no_reasoning` fails if thinking is on; `request` adds body fields such as `{"reasoning_effort": "none"}`. |
 | `conflicts` | `["ollama"]` unloads Ollama's models before starting. |
 | `max_idle_vram_bytes` | Refuse to start while a GPU holds more VRAM than this (AMD sysfs readings, when available), waiting up to `vram_settle_seconds`. |
 | `warm_seconds` (600), `lease_timeout_seconds` (300), `startup_timeout_seconds` (420) | Warm window after release (0 stops at once); lease expiry without `renew`; time to become ready. |
 | `runtime.sweeper` | `detached` or `external`; see below. |
-| `runtime.sweep_interval_seconds` (30), `caffeinate` (false, macOS only), `ollama_url`, `foreign_process_names` | Sweeper tick; hold `caffeinate -dimsu` for the server's life; loopback Ollama address; process names refused as not ours (default `llama-server`). |
+| `runtime.sweep_interval_seconds` (30), `keep_awake` (false), `ollama_url`, `foreign_process_names` | Sweeper tick; keep the machine from sleeping for the server's life, warm window included (`caffeinate -ims` on macOS, so displays may sleep; `systemd-inhibit` for sleep and idle on Linux); loopback Ollama address; process names refused as not ours (default `llama-server`). |
 | `runtime.peer_homes` | Homes of other instances on this machine, for a second slot: the server each one's state records is not refused as foreign. Give each instance its own home, manifest, port and node runtime, and the second instance the `detached` sweeper (the launchd job's label is fixed). |
 
 ## API key and network
@@ -93,7 +94,7 @@ llama-server answers anyone who can reach its port, so give it a key whenever `h
    key (32 to 1024 characters from `A-Z a-z 0-9 . _ ~ + / = -`) on one line. Anything else
    is refused before the server starts. The runtime reads the file each time it probes and
    never prints, logs or stores the key.
-2. In Poundlock, open **Connections**, edit this server's endpoint and enter the same key as its
+2. In Poundlock, open **Connections**, edit this model server and enter the same key as its
    **API key**. The controller sends it as `Authorization: Bearer` on every request. Do this first:
    a server without a key ignores the header.
 3. Set `server.api_key_file` in each profile and run `preflight`. The changed profile restarts
@@ -102,7 +103,8 @@ llama-server answers anyone who can reach its port, so give it a key whenever `h
 
 **Firewall.** A `0.0.0.0` bind listens on every interface. Allow the port only from the
 controller's address (an nftables, firewalld or ufw rule), or bind the address the controller
-uses. Job containers with outbound network can reach LAN ports too.
+uses. Poundlock's job containers never reach local addresses, but other machines on the
+network can.
 
 ## Behaviour
 
@@ -122,8 +124,11 @@ uses. Job containers with outbound network can reach LAN ports too.
     both. No systemd timer is used. Set `"sweeper": "external"` and run `sweep` from your
     own timer if you prefer one.
   - macOS: a launchd job runs `sweep` every minute.
-- **Sleep:** the node agent already holds an inhibitor for each lease, so the runtime
-  adds none on Linux. On macOS, `caffeinate` (if configured) also covers the warm window.
+- **Sleep:** the node agent holds an inhibitor only while a lease is open. Set
+  `runtime.keep_awake` to keep the machine awake for as long as a model is loaded, warm
+  window included. A suspend with a model in GPU memory has to copy it to RAM, and can run
+  out of memory and hang. If the block can't be held (on Linux, `systemd-inhibit` needs the
+  node's polkit rule), the start fails rather than leaving a model loaded.
 - **Safety:** the manager signals only a process it can prove it started: same start-time
   token, same binary, and the profile's model, alias and port on the command line, even if
   `state.json` is edited. State and logs are private (`0700`/`0600`) under `--home`.

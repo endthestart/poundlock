@@ -1,9 +1,11 @@
 //! The draft check behind "Add a model": everything Poundlock would fill in
 //! for a model on a given server, and why, before anything is saved.
 //!
-//! The rules live here once, so the console, scripts and Gateway publish
-//! derive the same name, limits and defaults. It stores nothing and sends no
-//! inference request. Destination is reported as declared, never inferred.
+//! The rules live here once, so the console, the admin CLI, scripts and
+//! Gateway publish derive the same name, limits and defaults: the console shows
+//! the draft, and creating a model fills whatever the request left out from it
+//! (`fill_omitted`). The draft stores nothing and sends no inference request.
+//! Destination is reported as declared, never inferred.
 
 use super::{AdminAuth, ApiError, ApiResult, AppState};
 use crate::domain::{
@@ -12,7 +14,7 @@ use crate::domain::{
 use axum::extract::State;
 use axum::{Json, Router, routing::post};
 use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/api/v1/model-profiles/draft", post(draft))
@@ -252,6 +254,51 @@ pub(super) fn model_draft(state: &AppState, input: &DraftInput) -> ApiResult<Val
         "existing": existing,
         "problems": problems,
     }))
+}
+
+/// What a create request may leave to the draft. `uses` and `model_label` have
+/// their own rules in `fill_omitted`.
+const DRAFTED: [&str; 5] = [
+    "name",
+    "context_tokens",
+    "max_output_tokens",
+    "wake_policy",
+    "thinking",
+];
+
+/// Fill what a model create request left out (absent or null) with the
+/// draft's value for the same answers, so a client that sends only the
+/// endpoint and model gets what the console shows. `uses` is filled only when
+/// the legacy `workload_class` is absent too; `model_label` only when absent,
+/// since the console sends null for "no label".
+pub(super) fn fill_omitted(state: &AppState, body: &mut Map<String, Value>) -> ApiResult<()> {
+    let omitted = |body: &Map<String, Value>, key: &str| body.get(key).is_none_or(Value::is_null);
+    let fill_uses = omitted(body, "uses") && omitted(body, "workload_class");
+    let fill_label = !body.contains_key("model_label");
+    if !fill_uses && !fill_label && !DRAFTED.iter().any(|key| omitted(body, key)) {
+        return Ok(());
+    }
+    let input: DraftInput = serde_json::from_value(Value::Object(body.clone()))
+        .map_err(|error| ApiError::unprocessable(format!("invalid model profile: {error}")))?;
+    let draft = model_draft(state, &input)?;
+    let wanted: Vec<&str> = DRAFTED
+        .into_iter()
+        .filter(|key| omitted(body, key))
+        .chain(fill_uses.then_some("uses"))
+        .chain(fill_label.then_some("model_label"))
+        .collect();
+    for key in wanted {
+        let value = &draft[key]["value"];
+        if !value.is_null() {
+            body.insert(key.to_owned(), value.clone());
+        }
+    }
+    if omitted(body, "context_tokens") {
+        return Err(ApiError::bad(
+            "context_tokens is required: nothing reported this model's context. Use the server's own limit",
+        ));
+    }
+    Ok(())
 }
 
 fn runtime_identity<'a>(node: &'a Node, runtime: &str) -> Option<&'a Value> {

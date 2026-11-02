@@ -430,3 +430,28 @@ fn the_release_signing_script_produces_manifests_nodes_accept() {
     );
     assert!(approve(&info, Some(&public(&keypair(9))), &v("0.1.2")).is_err());
 }
+
+#[test]
+fn a_main_build_updates_a_release_and_an_older_main_build_and_yields_to_the_next_release() {
+    let pair = keypair(1);
+    let offer = |version: &str, current: &str| {
+        approve(
+            &signed(&pair, &manifest(version, SHA)),
+            Some(&public(&pair)),
+            &v(current),
+        )
+        .map(|approved| approved.map(|approved| approved.version.to_string()))
+    };
+    let dev = "0.3.0-dev.20261029013000";
+    assert_eq!(offer(dev, "0.2.1").unwrap().as_deref(), Some(dev));
+    assert_eq!(
+        offer(dev, "0.3.0-dev.20261028190000").unwrap().as_deref(),
+        Some(dev)
+    );
+    assert_eq!(offer(dev, dev).unwrap(), None);
+    assert_eq!(offer("0.3.0", dev).unwrap().as_deref(), Some("0.3.0"));
+    assert!(
+        offer("0.3.0-dev.20261028190000", dev).is_err(),
+        "no downgrade"
+    );
+}

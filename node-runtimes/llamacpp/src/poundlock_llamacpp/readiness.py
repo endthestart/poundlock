@@ -6,11 +6,12 @@ from pathlib import Path
 from typing import Any, Callable, Dict, FrozenSet, List, Optional
 
 from .errors import InfrastructureError, NotReady
-from .manifest import Profile, Warmup, read_api_key
+from .manifest import Profile, read_api_key
 from .state import utc_now
 from .system import RequestFailed, System
 
 MARKER_ATTEMPTS = 4
+GENERATION_CHECK_TOKENS = 8
 
 
 def json_has_int(value: Any, key: str, accepted: FrozenSet[int]) -> bool:
@@ -41,8 +42,7 @@ def refused(profile: Profile, error: RequestFailed) -> Optional[InfrastructureEr
     if profile.api_key_file is None:
         return InfrastructureError(f"{error}: llama-server wants an API key; set server.api_key_file")
     return InfrastructureError(
-        f"{error}: llama-server refused the key in server.api_key_file; "
-        "it reads the file only when it starts"
+        f"{error}: llama-server refused the key in server.api_key_file; it reads the file only when it starts"
     )
 
 
@@ -90,16 +90,21 @@ def check_markers(
 
 
 def _completion(
-    system: System, profile: Profile, warmup: Warmup, tokens: int, timeout: float
+    system: System,
+    profile: Profile,
+    prompt: str,
+    request: Dict[str, Any],
+    tokens: int,
+    timeout: float,
 ) -> Dict[str, Any]:
     body: Dict[str, Any] = {
         "model": profile.alias,
-        "messages": [{"role": "user", "content": warmup.prompt}],
+        "messages": [{"role": "user", "content": prompt}],
         "max_tokens": tokens,
         "temperature": 0,
         "stream": False,
     }
-    body.update(warmup.request)
+    body.update(request)
     try:
         result = system.http_json(
             "POST",
@@ -113,6 +118,36 @@ def _completion(
     if not isinstance(result, dict):
         raise InfrastructureError("warm-up response is not a JSON object")
     return result
+
+
+def _message(result: Dict[str, Any]) -> Dict[str, Any]:
+    choices = result.get("choices")
+    message = choices[0].get("message") if isinstance(choices, list) and choices else None
+    return message if isinstance(message, dict) else {}
+
+
+def degenerate(content: str) -> bool:
+    """One character repeated, such as 8,192 zeros in reply to a 4-token prompt."""
+    text = "".join(content.split())
+    return len(text) >= 4 and len(set(text)) == 1
+
+
+def _refuse_degenerate(content: str) -> None:
+    if degenerate(content):
+        raise InfrastructureError(
+            f"the server answers with one character repeated ({content.strip()[:12]!r}...): "
+            "it is generating garbage, though /health says ok"
+        )
+
+
+def check_generation(system: System, profile: Profile, timeout: float) -> None:
+    """One tiny completion: a warm server can keep passing every HTTP probe while it
+    generates garbage, so the probes alone never notice."""
+    request = profile.warmup.request if profile.warmup is not None else {}
+    result = _completion(
+        system, profile, "Reply with the word ok.", request, GENERATION_CHECK_TOKENS, timeout
+    )
+    _refuse_degenerate(str(_message(result).get("content") or ""))
 
 
 def run_warmup(
@@ -130,15 +165,16 @@ def run_warmup(
     warmup = profile.warmup
     if warmup is None:
         return {}
-    _completion(system, profile, warmup, warmup.prime_tokens, min(warmup.timeout_seconds, remaining()))
-    result = _completion(
-        system, profile, warmup, warmup.max_tokens, min(warmup.timeout_seconds, remaining())
+    prompt, request = warmup.prompt, warmup.request
+    _completion(
+        system, profile, prompt, request, warmup.prime_tokens, min(warmup.timeout_seconds, remaining())
     )
-    choices = result.get("choices")
-    message = choices[0].get("message") if isinstance(choices, list) and choices else None
-    reasoning = ""
-    if isinstance(message, dict):
-        reasoning = str(message.get("reasoning_content") or "")
+    result = _completion(
+        system, profile, prompt, request, warmup.max_tokens, min(warmup.timeout_seconds, remaining())
+    )
+    message = _message(result)
+    _refuse_degenerate(str(message.get("content") or ""))
+    reasoning = str(message.get("reasoning_content") or "")
     timings = result.get("timings")
     try:
         tokens_per_second = float(
@@ -170,4 +206,3 @@ def gpu_summary(readings: List[Dict[str, Any]]) -> str:
         f"{item['card']} vram_used={item.get('vram_used')} gtt_used={item.get('gtt_used')}"
         for item in readings
     )
-

@@ -28,20 +28,39 @@ from .artifacts import (
 )
 from .conflicts import release_conflicts, wait_for_idle_vram
 from .errors import BusyError, ConflictError, InfrastructureError, ManagerError, NotReady
+from .gpus import Device, device_arguments, largest_first, parse_devices
 from .manifest import Profile, RuntimeOptions, load_manifest
 from .platforms import detect_system
-from .readiness import check_markers, gpu_summary, probe, run_warmup
+from .readiness import check_generation, check_markers, gpu_summary, probe, run_warmup
 from .state import Store, utc_now
 from .system import ProcessInfo, System
 
 ACTIVE_PHASES = ("starting", "ready", "warm_idle")
 PUBLIC_KEYS = (
-    "schema_version", "revision", "updated_at", "phase", "model", "lease_id",
-    "lease_deadline_epoch", "released_lease_id", "release_deadline_epoch",
-    "last_operation_id", "last_stop_reason", "endpoint", "server_pid", "started_at",
-    "server_log", "last_server_log", "evidence", "failure",
+    "schema_version",
+    "revision",
+    "updated_at",
+    "phase",
+    "model",
+    "lease_id",
+    "lease_deadline_epoch",
+    "released_lease_id",
+    "release_deadline_epoch",
+    "last_operation_id",
+    "last_stop_reason",
+    "endpoint",
+    "server_pid",
+    "started_at",
+    "server_log",
+    "last_server_log",
+    "evidence",
+    "failure",
 )
 SERVER_STOP_GRACE = 20.0
+# A warm server reused within this long of its last generation check is not
+# checked again: each check is one tiny completion on the lease's path.
+GENERATION_CHECK_SECONDS = 600.0
+GENERATION_CHECK_TIMEOUT = 30.0
 HELPER_STOP_GRACE = 3.0
 
 
@@ -137,19 +156,22 @@ class Manager:
         pid = int(state.get("server_pid") or 0)
         if pid > 0 and (trusted or self._owned(state)):
             self.system.terminate(pid, SERVER_STOP_GRACE)
-        helper = state.get("caffeinate") or {}
+        helper = state.get("keep_awake") or {}
+        command = tuple(str(part) for part in helper.get("command") or ())
         self._terminate_if(
             int(helper.get("pid") or 0),
             str(helper.get("started") or ""),
-            lambda info: "caffeinate" in info.command and f"-w {pid}" in info.command,
+            lambda info: (
+                bool(command)
+                and (info.argv == command if info.argv is not None else info.command == " ".join(command))
+            ),
             HELPER_STOP_GRACE,
         )
         sweeper = state.get("sweeper") or {}
         self._terminate_if(
             int(sweeper.get("pid") or 0),
             str(sweeper.get("started") or ""),
-            lambda info: "poundlock_llamacpp" in info.command
-            and " sweeper " in f" {info.command} ",
+            lambda info: "poundlock_llamacpp" in info.command and " sweeper " in f" {info.command} ",
             HELPER_STOP_GRACE,
         )
 
@@ -230,8 +252,12 @@ class Manager:
                     )
         reason = "profile_switch"
         if state.get("profile_digest") == profile.digest:
+            checked = float(state.get("generation_checked_epoch") or 0)
             try:
                 ready = probe(self.system, profile)
+                if now - checked >= GENERATION_CHECK_SECONDS:
+                    check_generation(self.system, profile, GENERATION_CHECK_TIMEOUT)
+                    checked = now
             except (NotReady, InfrastructureError) as exc:
                 reason = "warm_server_unhealthy"
                 self.log(f"reuse refused: {str(exc)[:200]}")
@@ -246,6 +272,7 @@ class Manager:
                     last_operation_id=operation_id,
                     policy=self._policy(profile),
                     evidence={**state.get("evidence", {}), "ready": ready},
+                    generation_checked_epoch=checked,
                 )
                 state = self.store.write_state(state)
                 state = self._ensure_sweeper(state, options)
@@ -264,9 +291,7 @@ class Manager:
     def _refuse_foreign(self, profile: Profile, options: RuntimeOptions) -> None:
         names = sorted(set(options.foreign_process_names) | {profile.executable.name})
         peers = self._peer_servers(options)
-        foreign = sorted(
-            {pid for name in names for pid in self.system.find_processes(name)} - peers
-        )
+        foreign = sorted({pid for name in names for pid in self.system.find_processes(name)} - peers)
         if foreign:
             raise ConflictError(
                 "a llama-server that this runtime did not start is running "
@@ -302,11 +327,14 @@ class Manager:
         lease_id: str,
         operation_id: str,
     ) -> Dict[str, Any]:
-        if options.caffeinate and not self.system.supports_caffeinate:
-            raise InfrastructureError("runtime.caffeinate is only available on macOS")
+        if options.keep_awake and not self.system.supports_keep_awake:
+            raise InfrastructureError(
+                "runtime.keep_awake needs caffeinate (macOS) or systemd-inhibit and tail (Linux)"
+            )
         self._refuse_foreign(profile, options)
         environment = self._server_environment(profile)
         artifacts = verify_artifacts(self.system, self.store, profile, environment)
+        gpus = self._ordered_gpus(profile, environment)
         unloaded = release_conflicts(self.system, profile, options.ollama_url, self.log)
         idle_vram = wait_for_idle_vram(self.system, profile, self.clock, self.sleep)
 
@@ -314,7 +342,7 @@ class Manager:
         log_path = self.store.log_root / f"{stamp}-{operation_id}.server.log"
         started = self.clock()
         try:
-            pid = self.system.spawn_server(profile.command, environment, log_path)
+            pid = self.system.spawn_server([*profile.command, *device_arguments(gpus)], environment, log_path)
         except OSError as exc:
             raise InfrastructureError(f"cannot start {profile.executable}: {exc}") from exc
         running: Dict[str, Any] = {"server_pid": pid}
@@ -348,19 +376,22 @@ class Manager:
             )
             self.log(f"start pid={pid} log={log_path.name} unloaded={len(unloaded)}")
             self.store.prune_server_logs(log_path)
-            running = self._start_caffeinate(running, options)
+            running = self._start_keep_awake(running, options)
             running = self._ensure_sweeper(running, options)
             evidence = self._await_ready(profile, running, log_path, started)
+            self._check_keep_awake(running)
             gpu = self.system.gpu_memory()
             running.update(
                 phase="ready",
                 lease_deadline_epoch=self.clock() + profile.lease_timeout_seconds,
+                generation_checked_epoch=self.clock(),
                 evidence={
                     "artifact": artifacts,
                     **evidence,
                     "gpu": gpu,
                     "idle_vram_before_start": idle_vram if idle_vram >= 0 else None,
                     "conflicts_unloaded": unloaded,
+                    **({"gpus": [gpu.evidence() for gpu in gpus]} if gpus else {}),
                     "load_seconds": round(self.clock() - started, 1),
                 },
             )
@@ -370,6 +401,20 @@ class Manager:
             raise
         self.log(f"ready pid={pid} load_s={running['evidence']['load_seconds']}")
         return self.view(running, "ready")
+
+    def _ordered_gpus(self, profile: Profile, environment: Dict[str, str]) -> List[Device]:
+        """The profile's GPUs as the server binary lists them now, in the profile's order."""
+        if profile.gpu_order is None:
+            return []
+        try:
+            output = self.system.list_devices(profile.executable, environment)
+        except ManagerError as exc:
+            raise InfrastructureError(f"cannot list the server's GPUs: {exc}") from exc
+        devices = largest_first(parse_devices(output))
+        if not devices:
+            raise InfrastructureError(f"{profile.executable} --list-devices found no GPU")
+        self.log(f"gpus {' '.join(f'{gpu.name}={gpu.total_mib}MiB' for gpu in devices)}")
+        return devices
 
     def _abort_start(
         self, running: Dict[str, Any], profile: Profile, operation_id: str, error: BaseException
@@ -396,17 +441,31 @@ class Manager:
                 except OSError:
                     pass
 
-    def _start_caffeinate(self, state: Dict[str, Any], options: RuntimeOptions) -> Dict[str, Any]:
-        if not options.caffeinate:
+    def _start_keep_awake(self, state: Dict[str, Any], options: RuntimeOptions) -> Dict[str, Any]:
+        """Keep the machine awake while the model is loaded. A suspend with a model in GPU
+        memory must copy it to RAM, and one that ran out of memory doing so hung (23 Oct)."""
+        if not options.keep_awake:
             return state
-        command = self.system.caffeinate_command(int(state["server_pid"]))
+        command = self.system.keep_awake_command(int(state["server_pid"]))
         if command is None:
             return state
-        pid = self.system.spawn_helper(command, dict(os.environ), self.store.log_root / "caffeinate.log")
+        pid = self.system.spawn_helper(command, dict(os.environ), self.store.log_root / "keep-awake.log")
         info = self.system.inspect(pid)
         state = dict(state)
-        state["caffeinate"] = {"pid": pid, "started": info.started if info else ""}
+        state["keep_awake"] = {"pid": pid, "started": info.started if info else "", "command": command}
         return self.store.write_state(state)
+
+    def _check_keep_awake(self, state: Dict[str, Any]) -> None:
+        """A block the system refused (systemd-inhibit without polkit's permission exits at
+        once) must not leave a model loaded on a machine that may suspend under it."""
+        helper = state.get("keep_awake")
+        if not helper:
+            return
+        info = self.system.inspect(int(helper["pid"]))
+        if info is None or (helper["started"] and info.started != helper["started"]):
+            raise InfrastructureError(
+                "the keep-awake block could not be held; see keep-awake.log in the runtime's logs"
+            )
 
     def _ensure_sweeper(self, state: Dict[str, Any], options: RuntimeOptions) -> Dict[str, Any]:
         """Start the detached sweeper unless one is already running or sweeping is external."""
@@ -418,16 +477,18 @@ class Manager:
             return state
         prefix, extra = self.system.self_command()
         argv = prefix + [
-            "--home", str(self.home),
-            "--manifest", str(self.manifest_path),
+            "--home",
+            str(self.home),
+            "--manifest",
+            str(self.manifest_path),
             "sweeper",
-            "--watch-pid", str(state["server_pid"]),
-            "--interval", str(options.sweep_interval_seconds),
+            "--watch-pid",
+            str(state["server_pid"]),
+            "--interval",
+            str(options.sweep_interval_seconds),
         ]
         try:
-            pid = self.system.spawn_helper(
-                argv, {**os.environ, **extra}, self.store.log_root / "sweeper.log"
-            )
+            pid = self.system.spawn_helper(argv, {**os.environ, **extra}, self.store.log_root / "sweeper.log")
         except OSError as exc:
             self.log(f"sweeper did not start: {type(exc).__name__}; use the external sweep")
             return state
@@ -449,8 +510,9 @@ class Manager:
             if not self._owner_matches(info, owner):
                 # Linux shows a new process's command line only once exec has set it
                 # up, which can lag the spawn on a cold page cache. The same process
-                # with an empty command line is still starting, not gone.
-                if info is None or info.started != owner["started"] or any(info.argv):
+                # with an empty command line is still starting, not gone. macOS
+                # reports no argv, only the command string.
+                if info is None or info.started != owner["started"] or any(info.argv or (info.command,)):
                     raise InfrastructureError(f"llama-server exited while loading; see {log_path}")
                 self.sleep(pause)
                 continue
@@ -462,6 +524,9 @@ class Manager:
                 pause = min(pause * 1.5, self.poll_interval)
                 continue
             markers = check_markers(self.system, profile, log_path, self.sleep)
+            # The warm-up checks its own reply; without one, a tiny completion does.
+            if profile.warmup is None:
+                check_generation(self.system, profile, min(GENERATION_CHECK_TIMEOUT, deadline - self.clock()))
             warmup = run_warmup(
                 self.system,
                 profile,
@@ -489,9 +554,7 @@ class Manager:
                 raise InfrastructureError("llama-server is gone; the lease is lost")
             timeout = int((state.get("policy") or {}).get("lease_timeout_seconds", 300))
             state = dict(state)
-            state.update(
-                last_operation_id=operation_id, lease_deadline_epoch=self.clock() + timeout
-            )
+            state.update(last_operation_id=operation_id, lease_deadline_epoch=self.clock() + timeout)
             return self.view(self.store.write_state(state), "renewed")
 
     def release(self, lease_id: str, operation_id: str) -> Dict[str, Any]:

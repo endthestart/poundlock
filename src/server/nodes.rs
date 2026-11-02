@@ -131,7 +131,7 @@ async fn config_example(
     admin_auth(&state, &headers)?;
     Ok(Json(json!({
         "name":"node.toml",
-        "version":env!("CARGO_PKG_VERSION"),
+        "version":crate::VERSION,
         "toml":crate::node::example_config()
     })))
 }

@@ -18,8 +18,10 @@ def render_plist(executable: Path, home: Path, manifest: Path, interval_seconds:
             "Label": LAUNCHD_LABEL,
             "ProgramArguments": [
                 str(executable),
-                "--home", str(home),
-                "--manifest", str(manifest),
+                "--home",
+                str(home),
+                "--manifest",
+                str(manifest),
                 "sweep",
             ],
             "RunAtLoad": True,

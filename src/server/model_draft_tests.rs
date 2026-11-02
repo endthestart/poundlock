@@ -338,3 +338,110 @@ async fn the_draft_route_is_admin_only_and_stores_nothing() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+#[tokio::test]
+async fn creating_a_model_fills_only_what_was_left_out() {
+    let fixture = fixture();
+    fixture
+        .state
+        .store
+        .configure_wol(
+            &fixture.orion,
+            Some("02:00:00:00:00:01"),
+            Some("10.20.0.255:9"),
+        )
+        .unwrap();
+    let app = router(fixture.state.clone());
+    let create = |body: Value| {
+        send(
+            app.clone(),
+            "POST",
+            "/api/v1/model-profiles",
+            "admin-secret",
+            body,
+        )
+    };
+
+    // The console sends every value it showed, and a blank label as null.
+    let (status, profile) = create(json!({
+        "endpoint_id": fixture.server, "model_id": "qwen3.8-27b-mtp",
+        "node_id": fixture.orion, "runtime_profile": "llamacpp",
+        "name": "chosen", "context_tokens": 65536, "max_output_tokens": 4096,
+        "uses": ["interactive"], "wake_policy": "manual", "thinking": "model_default",
+        "model_label": null
+    }))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert_eq!(profile["name"], "chosen");
+    assert_eq!(profile["context_tokens"], 65536);
+    assert_eq!(profile["max_output_tokens"], 4096);
+    assert_eq!(profile["uses"], json!(["interactive"]));
+    assert_eq!(profile["wake_policy"], "manual");
+    assert_eq!(profile["thinking"], "model_default");
+    assert!(profile["model_label"].is_null(), "{profile}");
+
+    // What is left out comes from the draft.
+    let (status, profile) = create(json!({
+        "endpoint_id": fixture.server, "model_id": "qwen3.5-9b-q8_0",
+        "node_id": fixture.orion, "runtime_profile": "llamacpp"
+    }))
+    .await;
+    assert_eq!(status, StatusCode::OK, "{profile}");
+    assert_eq!(profile["name"], "orion-qwen3.5-9b-q8_0");
+    assert_eq!(profile["context_tokens"], 65536);
+    assert_eq!(profile["max_output_tokens"], 16384);
+    assert_eq!(profile["uses"], json!(["durable", "interactive"]));
+    assert_eq!(profile["wake_policy"], "on-demand");
+    assert_eq!(profile["thinking"], "off");
+    assert_eq!(profile["model_label"], "Qwen3.5-9B Q8_0");
+
+    // Nothing reports this model's context, so it has to be given.
+    let (status, error) =
+        create(json!({"endpoint_id": fixture.server, "model_id": "unlisted"})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{error}");
+    assert!(
+        error["error"]["message"]
+            .as_str()
+            .unwrap()
+            .starts_with("context_tokens is required"),
+        "{error}"
+    );
+    // A body that does not fit is still a 422.
+    let (status, _) = create(json!({"model_id": "unlisted"})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[tokio::test]
+async fn listing_a_servers_models_leaves_its_health_alone() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let upstream = axum::Router::new().route(
+        "/v1/models",
+        axum::routing::get(|| async { axum::Json(json!({"data": [{"id": "qwen"}]})) }),
+    );
+    tokio::spawn(async move { axum::serve(listener, upstream).await.ok() });
+    let (_directory, state) = state_with_artifacts(None);
+    let id = state
+        .store
+        .create_endpoint(
+            &serde_json::from_value(json!({
+                "name": "server", "kind": "openai",
+                "base_url": format!("http://{address}/v1"), "api_key": ""
+            }))
+            .unwrap(),
+        )
+        .unwrap()
+        .id;
+    let (status, listed) = send(
+        router(state.clone()),
+        "GET",
+        &format!("/api/v1/endpoints/{id}/models"),
+        "admin-secret",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{listed}");
+    assert_eq!(listed["model_ids"], json!(["qwen"]));
+    let endpoint = state.store.list_endpoints().unwrap().remove(0);
+    assert_eq!(endpoint.last_check.last_checked_at, None);
+}

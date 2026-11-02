@@ -6,7 +6,8 @@
 //!   proves it exists and what it advertises, not that this account may use it
 //!   or that a request will succeed.
 //! - **configured route** — LiteLLM routes it with a credential. Poundlock
-//!   reads this; it never writes LiteLLM routes or credentials (ADR 0001).
+//!   reads this, and adds one only from the add card the operator confirms
+//!   (`route_add.rs`, ADR 0001); it never writes credentials.
 //! - **published profile** — a Poundlock profile offers it to applications.
 //!
 //! Every handler here is operator-only.
@@ -112,6 +113,9 @@ async fn discover(
                         row["profile"] = published.map_or(Value::Null, |profile| {
                             json!({"id": profile.id, "name": profile.name,
                                 "served_model": profile.catalog.served_model,
+                                // What the profile charges by, which an operator may have
+                                // set when the route itself reports no price.
+                                "pricing": profile.catalog.pricing,
                                 "model_changed": profile.catalog.served_model.as_deref() != row["upstream_model"].as_str(),
                                 "status":
                                 if profile.retirement.disabled.is_some() { "disabled" } else { "enabled" }})
@@ -220,7 +224,7 @@ static OPENROUTER_CACHE: Mutex<CatalogCache> = Mutex::new(None);
 
 /// OpenRouter's public model list, trimmed to what the operator compares,
 /// cached for an hour. No credential is sent: this is the public catalog.
-async fn openrouter_catalog() -> anyhow::Result<(String, Vec<Value>)> {
+pub(super) async fn openrouter_catalog() -> anyhow::Result<(String, Vec<Value>)> {
     if let Some((at, fetched_at, models)) = OPENROUTER_CACHE.lock().expect("catalog cache").as_ref()
         && at.elapsed() < CATALOG_TTL
     {
@@ -241,6 +245,10 @@ async fn openrouter_catalog() -> anyhow::Result<(String, Vec<Value>)> {
         Some((Instant::now(), fetched_at.clone(), models.clone()));
     Ok((fetched_at, models))
 }
+
+/// The provider catalog cache is process-wide; tests that seed it take turns.
+#[cfg(test)]
+pub(crate) static CATALOG_SEED: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 #[cfg(test)]
 pub(crate) fn seed_catalog(models: Vec<Value>) {
@@ -277,6 +285,7 @@ pub(crate) fn catalog_models(body: &Value) -> Vec<Value> {
                         "name": model["name"],
                         "created": model["created"],
                         "context_tokens": model["context_length"],
+                        "max_output_tokens": model["top_provider"]["max_completion_tokens"],
                         "pricing": {
                             "input_per_mtok": per_mtok(&model["pricing"]["prompt"]),
                             "output_per_mtok": per_mtok(&model["pricing"]["completion"]),
@@ -310,7 +319,7 @@ struct RouteRef {
     route: String,
 }
 
-async fn gateway(state: &AppState, endpoint_id: &str) -> ApiResult<EndpointSecret> {
+pub(super) async fn gateway(state: &AppState, endpoint_id: &str) -> ApiResult<EndpointSecret> {
     let secret = state
         .store
         .endpoint_secret(endpoint_id)?
@@ -361,25 +370,36 @@ async fn test_route(
     ))
 }
 
-#[derive(Deserialize)]
-struct PublishRoute {
-    endpoint_id: String,
-    route: String,
+#[derive(Default, Deserialize)]
+pub(super) struct PublishRoute {
+    pub(super) endpoint_id: String,
+    pub(super) route: String,
     #[serde(default)]
-    name: Option<String>,
-    data_destination: String,
+    pub(super) name: Option<String>,
+    pub(super) data_destination: String,
     #[serde(default)]
-    context_tokens: Option<u64>,
+    pub(super) context_tokens: Option<u64>,
     #[serde(default)]
-    max_output_tokens: Option<u64>,
+    pub(super) max_output_tokens: Option<u64>,
     #[serde(default)]
-    uses: Option<Vec<String>>,
+    pub(super) uses: Option<Vec<String>>,
     #[serde(default)]
-    aliases: Vec<String>,
+    pub(super) aliases: Vec<String>,
     #[serde(default)]
-    model_label: Option<String>,
+    pub(super) model_label: Option<String>,
     #[serde(default)]
-    thinking: Option<String>,
+    pub(super) thinking: Option<String>,
+}
+
+/// Publishing is where an operator says where the data goes; it is never
+/// inferred from the provider name.
+pub(super) fn check_destination(destination: &str) -> ApiResult<()> {
+    if ["operator_network", "external"].contains(&destination) {
+        return Ok(());
+    }
+    Err(ApiError::bad(
+        "choose where this model processes data: operator_network or external",
+    ))
 }
 
 async fn publish_route(
@@ -387,15 +407,13 @@ async fn publish_route(
     _admin: AdminAuth,
     Json(input): Json<PublishRoute>,
 ) -> ApiResult<Json<ModelProfile>> {
-    // Publishing is where an operator says where the data goes; it is never
-    // inferred from the provider name.
-    if !["operator_network", "external"].contains(&input.data_destination.as_str()) {
-        return Err(ApiError::bad(
-            "choose where this model processes data: operator_network or external",
-        ));
-    }
-    let secret = gateway(&state, &input.endpoint_id).await?;
-    let deployment = find_route(&state, &secret, &input.route).await?;
+    Ok(Json(publish(&state, &input).await?))
+}
+
+pub(super) async fn publish(state: &AppState, input: &PublishRoute) -> ApiResult<ModelProfile> {
+    check_destination(&input.data_destination)?;
+    let secret = gateway(state, &input.endpoint_id).await?;
+    let deployment = find_route(state, &secret, &input.route).await?;
     let row = route_row(&deployment);
     let context_tokens = input.context_tokens.unwrap_or_else(|| {
         row["context_tokens"]
@@ -426,6 +444,7 @@ async fn publish_route(
         runtime_profile: None,
         idle_seconds: None,
         data_destination: input.data_destination.clone(),
+        declare_server: false,
         thinking: input
             .thinking
             .clone()
@@ -434,7 +453,7 @@ async fn publish_route(
         capabilities: Vec::new(),
     })?;
     let catalog = catalog_from_route(&row, &RouteCatalog::default());
-    Ok(Json(set_catalog(&state, &profile.id, catalog)?))
+    set_catalog(state, &profile.id, catalog)
 }
 
 /// The published catalog for a route, keeping verified reasoning levels only
@@ -537,6 +556,33 @@ pub(crate) fn level_verified(
     }
 }
 
+/// Levels the upstream accepted without reasoning, below one it reasoned at. A level that
+/// nothing stronger confirms may have been dropped on the way, but here the route has shown
+/// it carries the setting: an adaptive model just saw no need to think about a short probe.
+/// Claude Sonnet 5.5 reasoned 0 tokens at low and medium here, and 138,000 at medium on a
+/// real review, and leaving them out made Poundlock refuse both for every client.
+pub(crate) fn quiet_below_reasoning(probes: &[(String, u16, Option<u64>)]) -> Vec<String> {
+    let rank = |level: &str| REASONING_LEVELS.iter().position(|known| *known == level);
+    let strongest = probes
+        .iter()
+        .filter(|(_, status, seen)| *status == 200 && seen.is_some_and(|tokens| tokens > 0))
+        .filter_map(|(level, ..)| rank(level))
+        .max();
+    let Some(strongest) = strongest else {
+        return Vec::new();
+    };
+    probes
+        .iter()
+        .filter(|(level, status, seen)| {
+            level != "none"
+                && *status == 200
+                && *seen == Some(0)
+                && rank(level).is_some_and(|position| position < strongest)
+        })
+        .map(|(level, ..)| level.clone())
+        .collect()
+}
+
 /// Characters of reasoning text in a llama.cpp chat answer, which carries it in
 /// `message.reasoning_content` and leaves it out when the model did not think.
 /// `None` when the body is not a chat answer, so an unreadable reply is never
@@ -614,6 +660,7 @@ async fn verify_reasoning(
         .map_err(|_| ApiError::unavailable("the configured inference runtime is unavailable"))?;
     let mut results = Vec::new();
     let mut verified = Vec::new();
+    let mut probes = Vec::new();
     let llamacpp = crate::domain::serves_llamacpp(&profile);
     for level in &candidates {
         let mut request = json!({
@@ -656,6 +703,7 @@ async fn verify_reasoning(
         if ok {
             verified.push(level.clone());
         }
+        probes.push((level.clone(), status, seen));
         results.push(json!({
             "level": level,
             "status": status,
@@ -666,6 +714,18 @@ async fn verify_reasoning(
             "verified": ok,
             "note": note,
         }));
+    }
+    for quiet in quiet_below_reasoning(&probes) {
+        if let Some(result) = results
+            .iter_mut()
+            .find(|result| result["level"] == quiet.as_str())
+        {
+            result["verified"] = json!(true);
+            result["note"] = json!(
+                "a stronger level reasoned on this route, so the level arrives; this short probe drew no thinking at it"
+            );
+        }
+        verified.push(quiet);
     }
     // Keep the vocabulary order, whatever order the levels were probed in.
     verified.sort_by_key(|level| REASONING_LEVELS.iter().position(|known| known == level));

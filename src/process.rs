@@ -11,6 +11,11 @@ pub(crate) fn isolate(command: &mut Command) {
     }
 }
 
+/// The last `limit` bytes of a subprocess's output, as text.
+pub(crate) fn bounded(bytes: &[u8], limit: usize) -> String {
+    String::from_utf8_lossy(&bytes[bytes.len().saturating_sub(limit)..]).into_owned()
+}
+
 pub(crate) struct ProcessGroup {
     pid: u32,
     armed: bool,
@@ -39,5 +44,14 @@ impl Drop for ProcessGroup {
     fn drop(&mut self) {
         self.terminate();
         self.armed = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn bounded_keeps_the_tail() {
+        assert_eq!(super::bounded(b"abcdef", 4), "cdef");
+        assert_eq!(super::bounded(b"ab", 4), "ab");
     }
 }

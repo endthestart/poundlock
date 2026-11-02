@@ -302,7 +302,7 @@ pub(super) async fn execute(
             outcome.agent.stderr.clone(),
             4 * 1024 * 1024,
         );
-        let turn_settled = crate::harness::agent_turn_settled(&bounded);
+        let pi = crate::harness::pi_outcome(&bounded);
         let wall_budget_stopped = wall_budget_failure(outcome.failure.as_ref());
         // A truncated capture never stops the agent process (see
         // `Docker::exec`), and a wall-deadline cutoff does not erase output
@@ -312,8 +312,8 @@ pub(super) async fn execute(
         // though the attempt will still be reported as a failure (see
         // `verification_worth_running`).
         let agent_succeeded = outcome.agent.code == 0
-            && verification_worth_running(outcome.failure.as_ref(), turn_settled)
-            && crate::harness::pi_failure(&bounded).is_none()
+            && verification_worth_running(outcome.failure.as_ref(), pi.settled)
+            && pi.failure.is_none()
             && outcome.patches.is_ok();
         if agent_succeeded {
             if let Err(error) = checkpoint(result_dir, package, docker, &outcome) {

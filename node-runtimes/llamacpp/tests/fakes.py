@@ -48,7 +48,8 @@ class FakeSystem(System):
         self.version_env: Optional[Dict[str, str]] = None
         self.spawn_error: Optional[OSError] = None
         self.log_text = "offloaded 33/33 layers to GPU\n"
-        self.supports_caffeinate = False
+        self.supports_keep_awake = False
+        self.keep_awake_refused = False  # the block's helper exits at once
         # server behaviour
         self.server_pid: Optional[int] = None
         self.loading_polls = 0  # /health answers 503 this many times first
@@ -57,8 +58,18 @@ class FakeSystem(System):
         self.tps = 60.0
         self.reasoning = ""
         self.warmup_error = False
+        self.reply_content = "ok"  # what every completion answers
+        # what `llama-server --list-devices` prints: the order Metal lists them in after a reboot
+        self.device_listing = (
+            "Available devices:\n"
+            "  MTL0: AMD Radeon Pro 580X (8192 MiB, 8191 MiB free)\n"
+            "  MTL1: AMD Radeon Pro W5700X (16368 MiB, 16367 MiB free)\n"
+            "  BLAS: Accelerate (0 MiB, 0 MiB free)\n"
+        )
+        self.degenerate_pid: Optional[int] = None  # this server answers zeros, its probes still pass
         self.crash_after_spawn = False
         self.exec_pending_inspects = 0  # inspects that see the server with no command line yet
+        self.replaced_after_spawn = False  # the server's PID shows another program, with no argv (macOS)
         self.ollama_models: List[str] = []
         self.ollama_up = True
         self.required_key: Optional[str] = None  # a key the server wants that no profile names
@@ -74,6 +85,8 @@ class FakeSystem(System):
         if info is not None and pid == self.server_pid and self.exec_pending_inspects > 0:
             self.exec_pending_inspects -= 1
             return ProcessInfo(pid=pid, started=info.started, command="", argv=("",), exe=info.exe)
+        if info is not None and pid == self.server_pid and self.replaced_after_spawn:
+            return ProcessInfo(pid=pid, started=info.started, command="/usr/bin/other", exe="/usr/bin/other")
         return info
 
     def runs_binary(self, info: ProcessInfo, binary: Path) -> bool:
@@ -91,8 +104,8 @@ class FakeSystem(System):
     def server_environment(self, home: Path) -> Dict[str, str]:
         return {"XDG_CACHE_HOME": str(home / "cache")}
 
-    def caffeinate_command(self, server_pid: int) -> Optional[List[str]]:
-        return ["caffeinate", "-dimsu", "-w", str(server_pid)] if self.supports_caffeinate else None
+    def keep_awake_command(self, server_pid: int) -> Optional[List[str]]:
+        return ["keep-awake", str(server_pid)] if self.supports_keep_awake else None
 
     def self_command(self):
         return ["python3", "-m", "poundlock_llamacpp"], {}
@@ -118,6 +131,9 @@ class FakeSystem(System):
         if self.version_error:
             raise ManagerError(self.version_error)
         return self.version_text
+
+    def list_devices(self, executable: Path, env=None, timeout: float = 60.0) -> str:
+        return self.device_listing
 
     def read_log(self, path: Path, limit: int = 0) -> str:
         return self.log_text
@@ -152,6 +168,9 @@ class FakeSystem(System):
 
     def spawn_helper(self, argv, env, log_path) -> int:
         self.helpers.append(list(argv))
+        if self.keep_awake_refused and argv[0] == "keep-awake":
+            self.next_pid += 1
+            return self.next_pid  # never seen alive
         return self._add(list(argv), prefix="h")
 
     def terminate(self, pid: int, grace_seconds: float = 20.0) -> None:
@@ -190,7 +209,8 @@ class FakeSystem(System):
         if url.endswith("/v1/chat/completions"):
             if self.warmup_error:
                 raise RequestFailed("HTTP 400 from /v1/chat/completions")
-            message: Dict[str, Any] = {"content": "ok"}
+            content = "0" * 8 if self.server_pid == self.degenerate_pid else self.reply_content
+            message: Dict[str, Any] = {"content": content}
             if self.reasoning:
                 message["reasoning_content"] = self.reasoning
             return {"choices": [{"message": message}], "timings": {"predicted_per_second": self.tps}}

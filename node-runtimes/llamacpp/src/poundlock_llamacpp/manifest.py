@@ -20,6 +20,7 @@ from typing import Any, Dict, FrozenSet, List, Mapping, Optional, Set, Tuple
 from urllib.parse import urlsplit
 
 from .errors import InfrastructureError, ManagerError
+from .gpus import GPU_ORDERS
 
 SCHEMA_VERSION = 1
 
@@ -49,8 +50,19 @@ KEYED_OPTIONS: Dict[str, str] = {
 # Options that make llama-server fetch a model, bypassing the size and SHA-256 check.
 REMOTE_MODEL_OPTIONS: FrozenSet[str] = frozenset(
     {
-        "-hf", "-hfr", "--hf-repo", "-hff", "--hf-file", "-hfv", "--hf-repo-v",
-        "-hffv", "--hf-file-v", "-mu", "--model-url", "-dr", "--docker-repo",
+        "-hf",
+        "-hfr",
+        "--hf-repo",
+        "-hff",
+        "--hf-file",
+        "-hfv",
+        "--hf-repo-v",
+        "-hffv",
+        "--hf-file-v",
+        "-mu",
+        "--model-url",
+        "-dr",
+        "--docker-repo",
     }
 )
 KNOWN_CONFLICTS: FrozenSet[str] = frozenset({"ollama"})
@@ -58,9 +70,7 @@ SWEEPERS: FrozenSet[str] = frozenset({"detached", "external"})
 LOOPBACK_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 
 DEFAULT_OLLAMA_URL = "http://127.0.0.1:11434"
-DEFAULT_WARMUP_PROMPT = (
-    "Write a Python function that returns the n-th Fibonacci number, with a docstring."
-)
+DEFAULT_WARMUP_PROMPT = "Write a Python function that returns the n-th Fibonacci number, with a docstring."
 # The node agent stops an ensure command after 600 seconds; leave room for hashing,
 # unloading conflicts and cleanup around the startup window.
 MAX_STARTUP_SECONDS = 570
@@ -81,7 +91,7 @@ class Warmup:
 class RuntimeOptions:
     sweeper: Optional[str]  # None means the platform default
     sweep_interval_seconds: int
-    caffeinate: bool
+    keep_awake: bool
     ollama_url: str
     foreign_process_names: Tuple[str, ...]
     # Homes of other instances on this machine (a second slot): their servers are not foreign.
@@ -106,6 +116,8 @@ class Profile:
     environment: Dict[str, str]
     api_key_file: Optional[Path]
     slots_endpoint: bool
+    # Set: the runtime finds the GPUs at each start and passes them, ordered, as --device.
+    gpu_order: Optional[str]
     required_log_markers: Tuple[str, ...]
     warmup: Optional[Warmup]
     conflicts: Tuple[str, ...]
@@ -133,11 +145,16 @@ class Profile:
     def command(self) -> List[str]:
         command = [
             str(self.executable),
-            "--model", str(self.model_path),
-            "--alias", self.alias,
-            "--ctx-size", str(self.context_tokens),
-            "--host", self.host,
-            "--port", str(self.port),
+            "--model",
+            str(self.model_path),
+            "--alias",
+            self.alias,
+            "--ctx-size",
+            str(self.context_tokens),
+            "--host",
+            self.host,
+            "--port",
+            str(self.port),
         ]
         if self.api_key_file is not None:
             command += ["--api-key-file", str(self.api_key_file)]
@@ -257,7 +274,7 @@ def _parse_runtime(raw: Mapping[str, Any]) -> RuntimeOptions:
         {
             "sweeper",
             "sweep_interval_seconds",
-            "caffeinate",
+            "keep_awake",
             "ollama_url",
             "foreign_process_names",
             "peer_homes",
@@ -276,7 +293,7 @@ def _parse_runtime(raw: Mapping[str, Any]) -> RuntimeOptions:
         sweep_interval_seconds=_integer(
             raw.get("sweep_interval_seconds", 30), "runtime.sweep_interval_seconds", 1, 3600
         ),
-        caffeinate=_boolean(raw.get("caffeinate", False), "runtime.caffeinate"),
+        keep_awake=_boolean(raw.get("keep_awake", False), "runtime.keep_awake"),
         ollama_url=url.rstrip("/"),
         foreign_process_names=tuple(
             _string_list(raw.get("foreign_process_names", ["llama-server"]), "runtime.foreign_process_names")
@@ -302,23 +319,39 @@ def parse_profile(alias: str, raw_value: Any) -> Profile:
         _only_keys(
             raw,
             {
-                "model", "server", "required_log_markers", "warmup", "conflicts",
-                "max_idle_vram_bytes", "vram_settle_seconds", "warm_seconds",
-                "lease_timeout_seconds", "startup_timeout_seconds",
+                "model",
+                "server",
+                "required_log_markers",
+                "warmup",
+                "conflicts",
+                "max_idle_vram_bytes",
+                "vram_settle_seconds",
+                "warm_seconds",
+                "lease_timeout_seconds",
+                "startup_timeout_seconds",
             },
             where,
         )
         model = _mapping(raw.get("model"), f"{where}.model")
         _only_keys(
-            model, {"path", "size_bytes", "sha256", "family", "quantization", "source"},
+            model,
+            {"path", "size_bytes", "sha256", "family", "quantization", "source"},
             f"{where}.model",
         )
         server = _mapping(raw.get("server"), f"{where}.server")
         _only_keys(
             server,
             {
-                "executable", "min_build", "host", "port", "context_tokens",
-                "arguments", "environment", "api_key_file", "slots_endpoint",
+                "executable",
+                "min_build",
+                "host",
+                "port",
+                "context_tokens",
+                "arguments",
+                "environment",
+                "api_key_file",
+                "slots_endpoint",
+                "gpu_order",
             },
             f"{where}.server",
         )
@@ -340,6 +373,7 @@ def parse_profile(alias: str, raw_value: Any) -> Profile:
                     f"{where}.server.environment sets LLAMA_API_KEY; set server.api_key_file instead"
                 )
             _string(value, f"{where}.server.environment.{name}")
+        gpu_order = _gpu_order(server.get("gpu_order"), arguments, environment, where)
         host = _string(server.get("host", "127.0.0.1"), f"{where}.server.host")
         _check_host(host, where)
         idle_vram = raw.get("max_idle_vram_bytes")
@@ -356,26 +390,21 @@ def parse_profile(alias: str, raw_value: Any) -> Profile:
             min_build=_integer(server.get("min_build", 0), f"{where}.server.min_build", 0),
             host=host,
             port=_integer(server.get("port"), f"{where}.server.port", 1, 65535),
-            context_tokens=_integer(
-                server.get("context_tokens"), f"{where}.server.context_tokens", 1
-            ),
+            context_tokens=_integer(server.get("context_tokens"), f"{where}.server.context_tokens", 1),
             arguments=tuple(arguments),
             environment={str(name): str(value) for name, value in environment.items()},
             api_key_file=(
-                None if api_key_file is None
-                else _absolute(api_key_file, f"{where}.server.api_key_file")
+                None if api_key_file is None else _absolute(api_key_file, f"{where}.server.api_key_file")
             ),
-            slots_endpoint=_boolean(
-                server.get("slots_endpoint", True), f"{where}.server.slots_endpoint"
-            ),
+            slots_endpoint=_boolean(server.get("slots_endpoint", True), f"{where}.server.slots_endpoint"),
+            gpu_order=gpu_order,
             required_log_markers=tuple(
                 _string_list(raw.get("required_log_markers", []), f"{where}.required_log_markers")
             ),
             warmup=_parse_warmup(raw.get("warmup"), where),
             conflicts=tuple(conflicts),
             max_idle_vram_bytes=(
-                None if idle_vram is None
-                else _integer(idle_vram, f"{where}.max_idle_vram_bytes", 1)
+                None if idle_vram is None else _integer(idle_vram, f"{where}.max_idle_vram_bytes", 1)
             ),
             vram_settle_seconds=_integer(
                 raw.get("vram_settle_seconds", 30), f"{where}.vram_settle_seconds", 0, 300
@@ -386,14 +415,18 @@ def parse_profile(alias: str, raw_value: Any) -> Profile:
             ),
             startup_timeout_seconds=_integer(
                 raw.get("startup_timeout_seconds", 420),
-                f"{where}.startup_timeout_seconds", 1, MAX_STARTUP_SECONDS,
+                f"{where}.startup_timeout_seconds",
+                1,
+                MAX_STARTUP_SECONDS,
             ),
             # The alias is part of the identity: two profiles that differ only by alias
             # start servers that answer to different model ids.
             digest=hashlib.sha256(
                 json.dumps(
                     {"alias": alias, "profile": raw},
-                    sort_keys=True, separators=(",", ":"), default=str,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    default=str,
                 ).encode()
             ).hexdigest(),
         )
@@ -409,8 +442,13 @@ def _parse_warmup(value: Any, where: str) -> Optional[Warmup]:
     _only_keys(
         raw,
         {
-            "prompt", "prime_tokens", "max_tokens", "timeout_seconds",
-            "min_tokens_per_second", "require_no_reasoning", "request",
+            "prompt",
+            "prime_tokens",
+            "max_tokens",
+            "timeout_seconds",
+            "min_tokens_per_second",
+            "require_no_reasoning",
+            "request",
         },
         f"{where}.warmup",
     )
@@ -437,6 +475,22 @@ def _parse_warmup(value: Any, where: str) -> Optional[Warmup]:
     )
 
 
+def _gpu_order(value: Any, arguments: List[str], environment: Mapping[str, Any], where: str) -> Optional[str]:
+    """A found device order replaces a written one, so a profile states only one of them."""
+    if value is None:
+        return None
+    if value not in GPU_ORDERS:
+        raise ValueError(f"{where}.server.gpu_order must be one of {sorted(GPU_ORDERS)}")
+    if any(argument.split("=", 1)[0] in ("-dev", "--device") for argument in arguments):
+        raise ValueError(f"{where}.server.gpu_order sets --device; remove it from server.arguments")
+    if "GGML_METAL_DEVICE_LIST" in environment:
+        raise ValueError(
+            f"{where}.server.gpu_order orders the devices; remove GGML_METAL_DEVICE_LIST from "
+            "server.environment"
+        )
+    return str(value)
+
+
 def _check_arguments(arguments: List[str], where: str) -> None:
     for argument in arguments:
         option = argument.split("=", 1)[0]
@@ -446,9 +500,7 @@ def _check_arguments(arguments: List[str], where: str) -> None:
                 "alias, context size, host and port from the profile"
             )
         if option in KEYED_OPTIONS:
-            raise ValueError(
-                f"{where}.server.arguments has {option}; set {KEYED_OPTIONS[option]} instead"
-            )
+            raise ValueError(f"{where}.server.arguments has {option}; set {KEYED_OPTIONS[option]} instead")
         if option in REMOTE_MODEL_OPTIONS:
             raise ValueError(
                 f"{where}.server.arguments has {option}; profiles use a local file whose "

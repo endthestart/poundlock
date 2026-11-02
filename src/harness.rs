@@ -173,13 +173,8 @@ pub async fn pi_launch(launch: &PiLaunch<'_>, attempt_dir: &Path, cwd: &Path) ->
         .env("PI_TELEMETRY", "0")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.as_std_mut().process_group(0);
-    }
+        .stderr(Stdio::piped());
+    crate::process::isolate(&mut command);
     Ok(command)
 }
 
@@ -231,43 +226,26 @@ pub fn bounded_output(mut stdout: Vec<u8>, mut stderr: Vec<u8>, limit: usize) ->
     String::from_utf8_lossy(&stdout).into_owned()
 }
 
-// Pi can exit zero after a failed model request. Use the final assistant event,
-// allowing a later successful retry to supersede an earlier failure.
-pub fn pi_failure(output: &str) -> Option<serde_json::Value> {
-    let mut failure = None;
-    for line in output
-        .split("\n--- stderr ---\n")
-        .next()
-        .unwrap_or_default()
-        .lines()
-    {
-        let Ok(event) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if event["type"] == "message_end" && event["message"]["role"] == "assistant" {
-            failure = match event["message"]["stopReason"].as_str() {
-                Some("error" | "aborted") => {
-                    Some(json!({"layer":"harness","code":"model_request_failed",
-                    "message":"The model request failed. Inspect the retained agent output.","retry_safe":false}))
-                }
-                Some("length") => Some(json!({"layer":"harness","code":"model_output_limit",
-                    "message":"The model reached its output limit before finishing. Review the retained patch and adjust the model profile output or context limit before retrying.","retry_safe":false})),
-                _ => None,
-            };
-        }
-    }
-    failure
+/// What Pi's event stream says about how the agent's work ended. Only stdout
+/// is read, and the final assistant `message_end` decides, so a later
+/// successful retry supersedes an earlier failure.
+#[derive(Debug)]
+pub struct PiOutcome {
+    /// Pi can exit zero after a failed model request: the final assistant
+    /// message stopped on an error, an abort or its output limit.
+    pub failure: Option<serde_json::Value>,
+    /// The agent's own final turn reached a normal end. A truncated capture
+    /// only means the runner discarded bytes past its output budget (see
+    /// `Docker::exec`); Pi's own process still runs to completion either way.
+    /// When the final turn had already settled before that happened, the
+    /// retained patch reflects finished work and is worth trusting even though
+    /// the attempt still reports an output-limit failure.
+    pub settled: bool,
 }
 
-// A truncated capture only means the runner discarded bytes past its output
-// budget (see `Docker::exec`); Pi's own process still runs to completion
-// either way. When the agent's own final turn already reached a normal
-// terminal state before that happened, the retained patch reflects finished
-// work and is worth trusting even though the attempt still reports an
-// output-limit failure. Mirrors `pi_failure`'s scan so both agree on what
-// counts as a terminal, non-error `message_end`.
-pub fn agent_turn_settled(output: &str) -> bool {
-    let mut settled = false;
+pub fn pi_outcome(output: &str) -> PiOutcome {
+    let mut stop_reason = None;
+    let mut turn_in_flight = false;
     for line in output
         .split("\n--- stderr ---\n")
         .next()
@@ -278,21 +256,32 @@ pub fn agent_turn_settled(output: &str) -> bool {
             continue;
         };
         if event["type"] == "message_end" && event["message"]["role"] == "assistant" {
-            // Only a terminal stop reason. `toolUse` ends the *message* before
-            // the tool runs, and the next `turn_start` arrives only once the
-            // tool has returned — so a denylist reads the entire
-            // tool-execution window, where a cutoff most often lands, as
-            // finished work. An unfamiliar reason is not evidence either.
-            settled = event["message"]["stopReason"].as_str() == Some("stop");
+            stop_reason = event["message"]["stopReason"].as_str().map(str::to_owned);
+            turn_in_flight = false;
         }
         // A turn that has begun and not yet ended is work in flight, whatever
         // the previous turn concluded: the agent had more to do and was
         // stopped partway through it.
         if event["type"] == "turn_start" {
-            settled = false;
+            turn_in_flight = true;
         }
     }
-    settled
+    let failure = match stop_reason.as_deref() {
+        Some("error" | "aborted") => Some(json!({"layer":"harness","code":"model_request_failed",
+            "message":"The model request failed. Inspect the retained agent output.","retry_safe":false})),
+        Some("length") => Some(json!({"layer":"harness","code":"model_output_limit",
+            "message":"The model reached its output limit before finishing. Review the retained patch and adjust the model profile output or context limit before retrying.","retry_safe":false})),
+        _ => None,
+    };
+    PiOutcome {
+        failure,
+        // Only a terminal stop reason. `toolUse` ends the *message* before the
+        // tool runs, and the next `turn_start` arrives only once the tool has
+        // returned — so a denylist reads the entire tool-execution window,
+        // where a cutoff most often lands, as finished work. An unfamiliar
+        // reason is not evidence either.
+        settled: stop_reason.as_deref() == Some("stop") && !turn_in_flight,
+    }
 }
 
 #[cfg(test)]
@@ -462,43 +451,46 @@ mod tests {
     #[test]
     fn model_error_is_not_a_successful_no_change_and_later_recovery_wins() {
         let failed = r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error","errorMessage":"Connection error."}}"#;
-        assert_eq!(pi_failure(failed).unwrap()["code"], "model_request_failed");
+        assert_eq!(
+            pi_outcome(failed).failure.unwrap()["code"],
+            "model_request_failed"
+        );
         let recovered = format!(
             "{failed}\n{}",
             r#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}"#
         );
-        assert!(pi_failure(&recovered).is_none());
+        assert!(pi_outcome(&recovered).failure.is_none());
     }
 
     #[test]
-    fn agent_turn_settled_requires_a_terminal_non_error_message_end() {
-        assert!(!agent_turn_settled(""));
-        assert!(!agent_turn_settled("not json\nneither is this"));
+    fn a_settled_turn_requires_a_terminal_non_error_message_end() {
+        assert!(!pi_outcome("").settled);
+        assert!(!pi_outcome("not json\nneither is this").settled);
         let settled =
             r#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}"#;
-        assert!(agent_turn_settled(settled));
+        assert!(pi_outcome(settled).settled);
         let mid_turn_cutoff = r#"{"type":"message_start","message":{"role":"assistant"}}
 {"type":"tool_call","name":"bash"#; // truncated mid-line, no terminal event
-        assert!(!agent_turn_settled(mid_turn_cutoff));
+        assert!(!pi_outcome(mid_turn_cutoff).settled);
         let failed =
             r#"{"type":"message_end","message":{"role":"assistant","stopReason":"error"}}"#;
-        assert!(!agent_turn_settled(failed));
+        assert!(!pi_outcome(failed).settled);
         let length_limited =
             r#"{"type":"message_end","message":{"role":"assistant","stopReason":"length"}}"#;
-        assert!(!agent_turn_settled(length_limited));
+        assert!(!pi_outcome(length_limited).settled);
         // A later turn's own settlement supersedes an earlier one, matching
-        // `pi_failure`'s "later recovery wins" semantics.
+        // the failure check's "later recovery wins" semantics.
         let recovered = format!("{failed}\n{settled}");
-        assert!(agent_turn_settled(&recovered));
+        assert!(pi_outcome(&recovered).settled);
         // Stray content after the marker (e.g. an appended stderr section)
         // does not retroactively unsettle a completed turn.
         let with_stderr = format!("{settled}\n--- stderr ---\nsome warning\n");
-        assert!(agent_turn_settled(&with_stderr));
+        assert!(pi_outcome(&with_stderr).settled);
         // A turn that started after the last settled message is work in
         // flight: the agent was cut off partway through it, not after it.
         let next_turn_begun =
             format!("{settled}\n{{\"type\":\"turn_end\"}}\n{{\"type\":\"turn_start\"}}");
-        assert!(!agent_turn_settled(&next_turn_begun));
+        assert!(!pi_outcome(&next_turn_begun).settled);
     }
 
     // Pi ends the assistant message *before* running the tool it asked for,
@@ -511,21 +503,21 @@ mod tests {
         let cut_off_running_a_tool = r#"{"type":"turn_start"}
 {"type":"message_end","message":{"role":"assistant","stopReason":"toolUse"}}
 {"type":"tool_execution_start","name":"bash"}"#;
-        assert!(!agent_turn_settled(cut_off_running_a_tool));
+        assert!(!pi_outcome(cut_off_running_a_tool).settled);
 
         // Even once the tool returns, the agent has not spoken again.
         let tool_returned = format!(
             "{cut_off_running_a_tool}\n{}",
             r#"{"type":"tool_execution_end","name":"bash"}"#
         );
-        assert!(!agent_turn_settled(&tool_returned));
+        assert!(!pi_outcome(&tool_returned).settled);
 
         // An unfamiliar stop reason is not evidence of finished work either.
         let unknown_reason =
             r#"{"type":"message_end","message":{"role":"assistant","stopReason":"refusal"}}"#;
-        assert!(!agent_turn_settled(unknown_reason));
+        assert!(!pi_outcome(unknown_reason).settled);
         let absent_reason = r#"{"type":"message_end","message":{"role":"assistant"}}"#;
-        assert!(!agent_turn_settled(absent_reason));
+        assert!(!pi_outcome(absent_reason).settled);
 
         // The full shape of a finished turn still settles.
         let finished = format!(
@@ -534,7 +526,7 @@ mod tests {
             r#"{"type":"message_end","message":{"role":"assistant","stopReason":"stop"}}"#,
             r#"{"type":"turn_end"}"#
         );
-        assert!(agent_turn_settled(&finished));
+        assert!(pi_outcome(&finished).settled);
     }
 
     // Pi 0.86 opens the stream with the transcript's system message. It is not
@@ -552,20 +544,20 @@ mod tests {
             r#"{"type":"agent_end","willRetry":false}"#,
             r#"{"type":"agent_settled"}"#
         );
-        assert!(pi_failure(&retried).is_none());
-        assert!(agent_turn_settled(&retried));
+        assert!(pi_outcome(&retried).failure.is_none());
+        assert!(pi_outcome(&retried).settled);
 
         let gave_up = format!(
             "{system}\n{failed}\n{}\n{}",
             r#"{"type":"agent_end","willRetry":false}"#, r#"{"type":"agent_settled"}"#
         );
         assert_eq!(
-            pi_failure(&gave_up).unwrap()["code"],
+            pi_outcome(&gave_up).failure.unwrap()["code"],
             "model_request_failed"
         );
-        assert!(!agent_turn_settled(&gave_up));
-        assert!(pi_failure(system).is_none());
-        assert!(!agent_turn_settled(system));
+        assert!(!pi_outcome(&gave_up).settled);
+        assert!(pi_outcome(system).failure.is_none());
+        assert!(!pi_outcome(system).settled);
     }
 
     #[test]
@@ -574,7 +566,10 @@ mod tests {
         assert!(validate_pi_context(8192).is_ok());
         let output =
             r#"{"type":"message_end","message":{"role":"assistant","stopReason":"length"}}"#;
-        assert_eq!(pi_failure(output).unwrap()["code"], "model_output_limit");
+        assert_eq!(
+            pi_outcome(output).failure.unwrap()["code"],
+            "model_output_limit"
+        );
     }
 
     #[tokio::test]

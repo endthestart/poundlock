@@ -12,9 +12,6 @@ pub struct AppConfig {
     pub git_hosts: Vec<String>,
     pub bind: SocketAddr,
     pub data_dir: PathBuf,
-    pub runtime_dir: PathBuf,
-    pub projects_dir: PathBuf,
-    pub work_dir: PathBuf,
     pub admin_token: String,
     pub runner_token: String,
     pub secrets: SecretBox,
@@ -38,12 +35,12 @@ pub struct AppConfig {
     /// line for a busy model before its 409; at most 110 s, the default. Zero
     /// keeps the old answer-at-once. A streamed one waits on its open stream.
     pub capacity_default_wait_seconds: u64,
-    /// When operator discovery reads OpenRouter's public model catalog, an
-    /// outbound request to openrouter.ai (`POUNDLOCK_OPENROUTER_CATALOG`).
-    pub openrouter_catalog: CatalogMode,
     /// The nightly database backup: `POUNDLOCK_BACKUP_DIR` turns it on,
     /// `POUNDLOCK_BACKUP_AT` (HH:MM, UTC, default 08:30) sets its time.
     pub backup: Option<crate::backup::BackupConfig>,
+    /// When operator discovery reads OpenRouter's public model catalog, an
+    /// outbound request to openrouter.ai (`POUNDLOCK_OPENROUTER_CATALOG`).
+    pub openrouter_catalog: CatalogMode,
 }
 
 /// `on-request` (the default) reads the catalog only when an operator asks for
@@ -81,7 +78,6 @@ impl AppConfig {
         let runtime_dir = path_env("POUNDLOCK_RUNTIME_DIR", "./runtime");
         fs::create_dir_all(&data_dir).context("create data directory")?;
         fs::create_dir_all(&runtime_dir).context("create runtime directory")?;
-        migrate_legacy_database(&data_dir)?;
         let (admin_token, created) = load_or_create_token(&data_dir.join("admin-token"))?;
         if created {
             eprintln!(
@@ -112,9 +108,6 @@ impl AppConfig {
                 .collect(),
             bind,
             data_dir,
-            runtime_dir,
-            projects_dir: path_env("POUNDLOCK_PROJECTS_DIR", "/projects"),
-            work_dir: path_env("POUNDLOCK_WORK_DIR", "/work"),
             admin_token,
             runner_token,
             secrets,
@@ -137,45 +130,14 @@ impl AppConfig {
                 "POUNDLOCK_CAPACITY_DEFAULT_WAIT_SECONDS",
                 110,
             )?,
-            openrouter_catalog: CatalogMode::from_env()?,
             backup: backup_env()?,
+            openrouter_catalog: CatalogMode::from_env()?,
         })
     }
 
     pub fn database_path(&self) -> PathBuf {
         self.data_dir.join("poundlock.sqlite3")
     }
-}
-
-pub fn reject_legacy_env() -> Result<()> {
-    if let Some((name, _)) =
-        env::vars_os().find(|(name, _)| name.to_string_lossy().starts_with("RCHARM_"))
-    {
-        anyhow::bail!(
-            "{} is obsolete; use the equivalent POUNDLOCK_* variable",
-            name.to_string_lossy()
-        );
-    }
-    Ok(())
-}
-
-fn migrate_legacy_database(data_dir: &Path) -> Result<()> {
-    let new = data_dir.join("poundlock.sqlite3");
-    let old = data_dir.join("rcharm.sqlite3");
-    if new.exists() || !old.exists() {
-        return Ok(());
-    }
-    fs::rename(&old, &new)
-        .with_context(|| format!("rename {} to {}", old.display(), new.display()))?;
-    for suffix in ["-wal", "-shm"] {
-        let from = data_dir.join(format!("rcharm.sqlite3{suffix}"));
-        if from.exists() {
-            let to = data_dir.join(format!("poundlock.sqlite3{suffix}"));
-            fs::rename(&from, &to)
-                .with_context(|| format!("rename {} to {}", from.display(), to.display()))?;
-        }
-    }
-    Ok(())
 }
 
 fn backup_env() -> Result<Option<crate::backup::BackupConfig>> {
@@ -247,39 +209,6 @@ fn load_or_create_token(path: &Path) -> Result<(String, bool)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn migrates_legacy_sqlite_and_sidecars_once() {
-        let directory = tempfile::tempdir().unwrap();
-        let data_dir = directory.path();
-        std::fs::write(data_dir.join("rcharm.sqlite3"), b"db").unwrap();
-        std::fs::write(data_dir.join("rcharm.sqlite3-wal"), b"wal").unwrap();
-        std::fs::write(data_dir.join("rcharm.sqlite3-shm"), b"shm").unwrap();
-        migrate_legacy_database(data_dir).unwrap();
-        assert!(data_dir.join("poundlock.sqlite3").exists());
-        assert!(data_dir.join("poundlock.sqlite3-wal").exists());
-        assert!(data_dir.join("poundlock.sqlite3-shm").exists());
-        assert!(!data_dir.join("rcharm.sqlite3").exists());
-        migrate_legacy_database(data_dir).unwrap();
-        assert_eq!(
-            std::fs::read(data_dir.join("poundlock.sqlite3")).unwrap(),
-            b"db"
-        );
-    }
-
-    #[test]
-    fn leaves_existing_poundlock_sqlite_alone() {
-        let directory = tempfile::tempdir().unwrap();
-        let data_dir = directory.path();
-        std::fs::write(data_dir.join("poundlock.sqlite3"), b"new").unwrap();
-        std::fs::write(data_dir.join("rcharm.sqlite3"), b"old").unwrap();
-        migrate_legacy_database(data_dir).unwrap();
-        assert_eq!(
-            std::fs::read(data_dir.join("poundlock.sqlite3")).unwrap(),
-            b"new"
-        );
-        assert!(data_dir.join("rcharm.sqlite3").exists());
-    }
 
     #[test]
     fn numeric_configuration_rejects_invalid_values() {

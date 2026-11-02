@@ -1,0 +1,12 @@
+# Nightly database backup (docs/guide/operations.md). Create the host folder once,
+# owned by the controller's user and private to it, and name it in .env:
+#   sudo install -d -o 10001 -g 10001 -m 700 /srv/poundlock-backup
+#   POUNDLOCK_BACKUP_PATH=/srv/poundlock-backup
+# docker compose -f compose.yaml -f compose.backup.yaml up -d
+services:
+  controller:
+    environment:
+      POUNDLOCK_BACKUP_DIR: /backup
+      POUNDLOCK_BACKUP_AT: ${POUNDLOCK_BACKUP_AT:-08:30}
+    volumes:
+      - ${POUNDLOCK_BACKUP_PATH:?Set POUNDLOCK_BACKUP_PATH to the host folder for nightly backups}:/backup

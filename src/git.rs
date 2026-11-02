@@ -250,13 +250,8 @@ pub(crate) fn git_command(cwd: &Path) -> Command {
         .arg(cwd)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::process::CommandExt;
-        command.as_std_mut().process_group(0);
-    }
+        .stderr(Stdio::piped());
+    crate::process::isolate(&mut command);
     command
 }
 
@@ -349,7 +344,11 @@ async fn git_text_with_limits(
     command.args(args);
     let output = git_output_with_limits(command, byte_limit, record_limit).await?;
     if !output.status.success() {
-        bail!("git {} failed: {}", args.join(" "), bounded(&output.stderr));
+        bail!(
+            "git {} failed: {}",
+            args.join(" "),
+            crate::process::bounded(&output.stderr, 4096)
+        );
     }
     String::from_utf8(output.stdout).context("git output is not UTF-8")
 }
@@ -370,15 +369,6 @@ fn slug(relative: &str, index: usize) -> String {
         })
         .collect::<String>();
     format!("{:02}-{}", index + 1, clean.trim_matches('-'))
-}
-
-fn bounded(bytes: &[u8]) -> String {
-    let bytes = if bytes.len() > 4096 {
-        &bytes[bytes.len() - 4096..]
-    } else {
-        bytes
-    };
-    String::from_utf8_lossy(bytes).into_owned()
 }
 
 #[cfg(all(test, unix))]

@@ -6,9 +6,7 @@ mod operations;
 mod poll_loop;
 #[cfg(test)]
 pub(crate) mod testing;
-pub use operations::{
-    check_config, check_config_identity, doctor, enroll_once, maintenance, revoke,
-};
+pub use operations::{check_config_identity, doctor, enroll_once, maintenance, revoke};
 pub mod network;
 mod update;
 
@@ -225,10 +223,12 @@ async fn load_or_enroll(
             &tokio::fs::read(&options.credential_file).await?,
         )?);
     }
-    let token = options
-        .enrollment_token
-        .as_deref()
-        .ok_or_else(|| anyhow::anyhow!("--enrollment-token is required for first enrollment"))?;
+    let token = options.enrollment_token.as_deref().ok_or_else(|| {
+        anyhow::anyhow!(
+            "This machine is not enrolled yet. Run poundlock node-enroll and paste an \
+             enrollment token from Machines."
+        )
+    })?;
     let enrolled = api
         .enroll(EnrollNode {
             token: token.into(),
@@ -257,7 +257,7 @@ async fn capabilities(config: &NodeConfig, controller: &str, data_dir: &std::pat
     json!({"controller_transport":transport,"runtimes":config.runtimes.keys().map(String::as_str).chain(config.ollama.enabled.then_some("ollama")).collect::<Vec<_>>(),
         "sleep_inhibitor":sleep_inhibitor_name(),"typed_actions":["ensure","renew","release","stop"],
         "action_long_poll":true,
-        "agent_version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+        "agent_version":crate::VERSION,"os":std::env::consts::OS,"arch":std::env::consts::ARCH,
         "auto_update":config.auto_update,
         "update_verification":if update::embedded_key_text().is_some() {"signature"} else {"checksum"},
         "network":config.network.report(),"inventory":inventory::collect(data_dir, &identity_commands(config)).await})
@@ -431,8 +431,8 @@ async fn run_owned_command(
         // group. Timeout and failure keep the group armed so Drop stops it.
         group.disarm();
     }
-    let stdout = bounded(&output.stdout);
-    let stderr = bounded(&output.stderr);
+    let stdout = crate::process::bounded(&output.stdout, 64 * 1024);
+    let stderr = crate::process::bounded(&output.stderr, 64 * 1024);
     if !output.status.success() {
         bail!(
             "runtime command exited {:?}: {stderr}",
@@ -449,15 +449,6 @@ fn field<'a>(value: &'a Value, name: &str) -> Result<&'a str> {
         .get(name)
         .and_then(Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("action field '{name}' is missing"))
-}
-
-fn bounded(bytes: &[u8]) -> String {
-    let bytes = if bytes.len() > 64 * 1024 {
-        &bytes[bytes.len() - 64 * 1024..]
-    } else {
-        bytes
-    };
-    String::from_utf8_lossy(bytes).into_owned()
 }
 
 fn default_heartbeat() -> u64 {

@@ -82,9 +82,7 @@ def build_parser() -> argparse.ArgumentParser:
     identity.add_argument("model", nargs="?")
     commands.add_parser("status", help="state plus live process and health observation")
     commands.add_parser("sweep", help="end abandoned starts, expired leases and warm servers")
-    preflight = commands.add_parser(
-        "preflight", help="verify model files and server builds; start nothing"
-    )
+    preflight = commands.add_parser("preflight", help="verify model files and server builds; start nothing")
     preflight.add_argument("model", nargs="?")
     plist = commands.add_parser("launchd-plist", help="print the macOS launchd sweep job")
     plist.add_argument("--executable", type=Path, help="installed poundlock-llamacpp path")
@@ -129,9 +127,7 @@ def dispatch(manager: Manager, args: argparse.Namespace) -> Dict[str, Any]:
 def print_launchd_plist(manager: Manager, args: argparse.Namespace) -> None:
     executable = args.executable or Path(sys.argv[0])
     sys.stdout.buffer.write(
-        render_plist(
-            executable.expanduser().absolute(), manager.home, manager.manifest_path, args.interval
-        )
+        render_plist(executable.expanduser().absolute(), manager.home, manager.manifest_path, args.interval)
     )
 
 

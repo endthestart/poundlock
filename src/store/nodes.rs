@@ -43,6 +43,8 @@ impl Store {
         Ok(token)
     }
 
+    /// Enrolls with the default 15-second offline threshold.
+    #[cfg(test)]
     pub fn enroll_node(&self, input: &EnrollNode) -> Result<EnrolledNode> {
         self.enroll_node_with_offline(input, 15)
     }
@@ -407,6 +409,7 @@ impl Store {
             params![job_id, kind], action_row).optional()?)
     }
 
+    #[cfg(test)]
     pub fn list_node_actions(&self, node_id: &str) -> Result<Vec<NodeAction>> {
         let connection = self.connection()?;
         let mut statement = connection.prepare(
@@ -434,11 +437,15 @@ impl Store {
         let connection = self.connection()?;
         let _relaxed = RelaxedSync::new(&connection, self.relaxed_sync_allowed);
         let transaction = connection.unchecked_transaction()?;
-        let stale_before = (Utc::now() - Duration::minutes(11)).to_rfc3339();
+        // A node runs one action at a time and polls again only once it has
+        // finished, so an action still running at its next poll never reached
+        // it: the reply that carried it was cut. A proxy restart lost a release
+        // that way, and the slot stayed held for its lease's five minutes
+        // (28 Oct); it used to wait 11. It goes out again now.
         transaction.execute(
             "UPDATE node_actions SET status='pending', updated_at=?1
-            WHERE node_id=?2 AND status='running' AND updated_at < ?3",
-            params![now(), node_id, stale_before],
+            WHERE node_id=?2 AND status='running'",
+            params![now(), node_id],
         )?;
         // Also fences actions queued by older controllers and stale action retries.
         let fenced = fence_released_actions(&transaction, node_id)?;

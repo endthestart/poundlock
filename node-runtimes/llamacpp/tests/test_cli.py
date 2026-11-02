@@ -25,8 +25,10 @@ class CliCase(LifecycleCase):
         base = {k: v for k, v in os.environ.items() if not k.startswith("POUNDLOCK_LLAMACPP")}
         with mock.patch.dict(os.environ, {**base, **(env or {})}, clear=True):
             with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-                code = cli.main(["--home", str(self.home), "--manifest", str(self.manifest_path), *argv],
-                                system=self.system)
+                code = cli.main(
+                    ["--home", str(self.home), "--manifest", str(self.manifest_path), *argv],
+                    system=self.system,
+                )
         return code, out.getvalue(), err.getvalue()
 
     def ok(self, *argv: str) -> Dict[str, Any]:
@@ -78,8 +80,10 @@ class ActionTests(CliCase):
 
     def test_ids_must_be_canonical_uuids(self) -> None:
         good = str(uuid4())
-        for bad_lease, message in (("not-a-uuid", "lease_id must be a UUID"),
-                                   (good.upper(), "canonical lowercase")):
+        for bad_lease, message in (
+            ("not-a-uuid", "lease_id must be a UUID"),
+            (good.upper(), "canonical lowercase"),
+        ):
             with self.subTest(bad_lease):
                 code, error = self.fails("ensure", ALIAS, bad_lease, good)
                 self.assertEqual(2, code)
@@ -168,8 +172,15 @@ class ConfigurationTests(CliCase):
         wrapper = io.TextIOWrapper(buffer, write_through=True)
         with mock.patch.object(sys, "stdout", wrapper):
             code = cli.main(
-                ["--home", str(self.home), "--manifest", str(self.manifest_path),
-                 "launchd-plist", "--executable", "/usr/local/bin/poundlock-llamacpp"],
+                [
+                    "--home",
+                    str(self.home),
+                    "--manifest",
+                    str(self.manifest_path),
+                    "launchd-plist",
+                    "--executable",
+                    "/usr/local/bin/poundlock-llamacpp",
+                ],
                 system=self.system,
             )
         self.assertEqual(0, code)
@@ -183,4 +194,3 @@ class ConfigurationTests(CliCase):
         self.assertEqual(value, cli.require_uuid(value, "lease_id"))
         with self.assertRaises(ManagerError):
             cli.require_uuid("", "lease_id")
-

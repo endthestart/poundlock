@@ -43,7 +43,11 @@ pub(super) async fn serve(
             Ok(Some(action)) => {
                 let (success, payload) = match host.execute(&action).await {
                     Ok(value) => (true, value),
-                    Err(error) => (false, json!({"message":error.to_string()})),
+                    Err(error) => {
+                        // The controller keeps the reason too, but its log goes with each deploy.
+                        tracing::warn!(action_id=%action.id, kind=%action.kind, %error, "node action failed");
+                        (false, json!({"message":error.to_string()}))
+                    }
                 };
                 if let Err(error) = api.complete(credential, &action.id, success, payload).await {
                     tracing::error!(action_id=%action.id, %error, "could not complete node action");

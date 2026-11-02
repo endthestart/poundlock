@@ -18,9 +18,7 @@ def unload_ollama(system: System, base_url: str, log: Callable[[str], None]) -> 
         return []
     models = listing.get("models") if isinstance(listing, dict) else None
     names = [
-        item["name"]
-        for item in models or []
-        if isinstance(item, dict) and isinstance(item.get("name"), str)
+        item["name"] for item in models or [] if isinstance(item, dict) and isinstance(item.get("name"), str)
     ]
     for name in names:
         try:

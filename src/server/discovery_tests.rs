@@ -568,6 +568,34 @@ async fn only_an_operator_puts_a_disabled_profile_back_in_service() {
 }
 
 #[test]
+fn a_quiet_level_counts_only_below_one_that_reasoned() {
+    let probe = |level: &str, status, seen| (level.to_string(), status, seen);
+    // Claude Sonnet 5.5's real answers: an adaptive model, with the route carrying the setting.
+    let adaptive = [
+        probe("none", 400, None),
+        probe("low", 200, Some(0)),
+        probe("medium", 200, Some(0)),
+        probe("high", 200, Some(142)),
+        probe("xhigh", 200, Some(280)),
+    ];
+    assert_eq!(quiet_below_reasoning(&adaptive), ["low", "medium"]);
+    // Silent above the strongest that reasoned, it may have been dropped on the way.
+    let dropped_above = [probe("high", 200, Some(50)), probe("xhigh", 200, Some(0))];
+    assert!(quiet_below_reasoning(&dropped_above).is_empty());
+    // Nothing reasoned: nothing shows the route carries the setting at all.
+    let silent = [probe("low", 200, Some(0)), probe("high", 200, Some(0))];
+    assert!(quiet_below_reasoning(&silent).is_empty());
+    // Refused, unreported and "none" are never let through.
+    let others = [
+        probe("none", 200, Some(0)),
+        probe("low", 400, Some(0)),
+        probe("medium", 200, None),
+        probe("high", 200, Some(9)),
+    ];
+    assert!(quiet_below_reasoning(&others).is_empty());
+}
+
+#[test]
 fn a_level_is_verified_only_by_its_visible_effect() {
     assert!(level_verified("none", 200, Some(0)).0);
     assert!(!level_verified("none", 200, Some(12)).0);
@@ -650,7 +678,9 @@ async fn discovery_flags_stale_model_without_mutating_until_explicit_refresh() {
             &serde_json::from_value(json!({
                 "catalog": {"served_model": "openrouter/openai/gpt-5.6-sol",
                     "reasoning_levels": ["none", "high"],
-                    "reasoning_verified_at": "2026-09-23T10:00:00Z"},
+                    "reasoning_verified_at": "2026-09-23T10:00:00Z",
+                    "pricing": {"input_per_mtok": 0.5, "output_per_mtok": 2.0,
+                        "source": "operator", "refreshed_at": "2026-09-23T10:00:00Z"}},
                 "model_label": "Owner's custom label"
             }))
             .unwrap(),
@@ -675,6 +705,7 @@ async fn discovery_flags_stale_model_without_mutating_until_explicit_refresh() {
         .unwrap();
     assert_eq!(route["state"], "published");
     assert_eq!(route["profile"]["model_changed"], true);
+    assert_eq!(route["profile"]["pricing"]["source"], "operator");
     assert_eq!(
         route["profile"]["served_model"],
         "openrouter/openai/gpt-5.6-sol"
