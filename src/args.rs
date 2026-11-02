@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(
-    version,
+    version = poundlock::VERSION,
     about = "Self-hosted control plane for coding agents and private inference"
 )]
 pub struct Args {
@@ -94,8 +94,6 @@ pub enum Command {
         controller: String,
         #[arg(long, default_value = "")]
         name: String,
-        #[arg(long, env = "POUNDLOCK_ENROLLMENT_TOKEN")]
-        enrollment_token: Option<String>,
         #[arg(long, default_value = "./node-credential.json")]
         credential_file: PathBuf,
         #[arg(long, default_value = "./node.toml")]
@@ -110,7 +108,7 @@ pub enum Command {
             default_value = "http://127.0.0.1:7331"
         )]
         controller: String,
-        #[arg(long, env = "POUNDLOCK_TOKEN")]
+        #[arg(long, env = "POUNDLOCK_TOKEN", hide_env_values = true)]
         token: Option<String>,
         #[arg(long)]
         token_file: Option<PathBuf>,
@@ -127,96 +125,10 @@ pub enum Command {
         #[arg(long)]
         instruction_file: Vec<String>,
     },
-    Status(Remote),
-    EndpointAdd {
-        #[command(flatten)]
-        remote: Remote,
-        #[arg(long)]
-        name: String,
-        #[arg(long, default_value = "openai")]
-        kind: String,
-        #[arg(long)]
-        base_url: String,
-        #[arg(long, env = "OPENAI_API_KEY", default_value = "")]
-        api_key: String,
-    },
-    ModelAdd {
-        #[command(flatten)]
-        remote: Remote,
-        #[arg(long)]
-        name: String,
-        #[arg(long)]
-        endpoint_id: String,
-        #[arg(long)]
-        model_id: String,
-        #[arg(long)]
-        context_tokens: u64,
-        #[arg(long)]
-        max_output_tokens: u64,
-        /// What the profile may serve: interactive, durable, completion.
-        #[arg(long, default_value = "durable")]
-        uses: Vec<String>,
-        #[arg(long, default_value = "never")]
-        wake_policy: String,
-        #[arg(long)]
-        node_id: Option<String>,
-        #[arg(long)]
-        runtime_profile: Option<String>,
-        #[arg(long)]
-        alias: Vec<String>,
-    },
-    ProjectAdd {
-        #[command(flatten)]
-        remote: Remote,
-        #[arg(long)]
-        name: String,
-        #[arg(long, required = true)]
-        root: Vec<String>,
-        #[arg(long)]
-        instruction_file: Vec<String>,
-    },
-    JobSubmit {
-        #[command(flatten)]
-        remote: Remote,
-        #[arg(long)]
-        project_id: String,
-        #[arg(long)]
-        model_profile_id: String,
-        #[arg(long, default_value = "pi")]
-        harness_profile_id: String,
-        #[arg(long)]
-        prompt: String,
-        #[arg(long)]
-        idempotency_key: Option<String>,
-        #[arg(long)]
-        watch: bool,
-    },
-    JobWatch {
-        #[command(flatten)]
-        remote: Remote,
-        id: String,
-    },
-    JobCancel {
-        #[command(flatten)]
-        remote: Remote,
-        id: String,
-    },
-    NodeToken {
-        #[command(flatten)]
-        remote: Remote,
-        #[arg(long, default_value_t = 15)]
-        valid_minutes: i64,
-    },
-    NodeWol {
-        #[command(flatten)]
-        remote: Remote,
-        id: String,
-        #[arg(long)]
-        mac: String,
-        #[arg(long, default_value = "255.255.255.255:9")]
-        broadcast: String,
-    },
-    NodeConfigExample,
+    // The admin CLI and the job commands: plain clients of a running
+    // controller's HTTP API (see `poundlock::cli`).
+    #[command(flatten)]
+    Remote(poundlock::cli::RemoteCommand),
     /// Validate configuration without registering a node or running runtime commands.
     NodeCheck {
         #[arg(long, default_value = "./node.toml")]
@@ -234,18 +146,6 @@ pub enum Command {
     NodePause(NodeFiles),
     /// Accept runtime actions again after maintenance.
     NodeResume(NodeFiles),
-}
-
-#[derive(clap::Args, Clone)]
-pub struct Remote {
-    #[arg(
-        long,
-        env = "POUNDLOCK_CONTROLLER_URL",
-        default_value = "http://127.0.0.1:7331"
-    )]
-    pub controller: String,
-    #[arg(long, env = "POUNDLOCK_TOKEN")]
-    pub token: String,
 }
 
 #[derive(clap::Args)]

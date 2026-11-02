@@ -84,9 +84,7 @@ def verify_artifacts(
     except OSError as exc:
         raise InfrastructureError(f"model file is unavailable: {exc}") from exc
     if size != profile.model_size:
-        raise InfrastructureError(
-            f"model size mismatch: expected {profile.model_size}, found {size}"
-        )
+        raise InfrastructureError(f"model size mismatch: expected {profile.model_size}, found {size}")
     cache = store.read_cache()
     entry = cache["models"].get(str(profile.model_path), {})
     if not (
@@ -135,4 +133,3 @@ def verify_artifacts(
         if value:
             evidence[key] = value
     return evidence
-

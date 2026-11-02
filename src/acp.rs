@@ -42,16 +42,13 @@ pub async fn run(options: AcpOptions) -> Result<()> {
     let new_root = api.options.workspace_root.clone();
     let connected = Agent
         .builder()
-        .name("smart-local-agent")
+        .name("poundlock")
         .on_receive_request(
             async |request: acp::InitializeRequest, responder, _connection| {
                 responder.respond(
                     acp::InitializeResponse::new(request.protocol_version)
                         .agent_capabilities(acp::AgentCapabilities::default())
-                        .agent_info(acp::Implementation::new(
-                            "Smart Local AI",
-                            env!("CARGO_PKG_VERSION"),
-                        )),
+                        .agent_info(acp::Implementation::new("Poundlock", crate::VERSION)),
                 )
             },
             agent_client_protocol::on_receive_request!(),
@@ -115,7 +112,7 @@ pub async fn run(options: AcpOptions) -> Result<()> {
                     let _ = acp_local::notify(
                         &connection,
                         request.session_id,
-                        &format!("Smart Local AI could not complete this turn: {error}"),
+                        &format!("Poundlock could not complete this turn: {error}"),
                     );
                 }
                 responder.respond(acp::PromptResponse::new(reason))

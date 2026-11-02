@@ -4,6 +4,10 @@ FROM rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a3
 # (docs/node-update-signing.md). Empty builds nodes that accept checksummed
 # updates over HTTPS or loopback only.
 ARG POUNDLOCK_UPDATE_PUBLIC_KEY=
+# The commit built, shown beside the version.
+ARG POUNDLOCK_BUILD_COMMIT=
+# A main build's dev prerelease (scripts/dev_version.py); empty for a release.
+ARG POUNDLOCK_BUILD_VERSION=
 WORKDIR /source
 COPY Cargo.toml Cargo.lock ./
 COPY migrations ./migrations
@@ -11,7 +15,6 @@ COPY config ./config
 COPY src ./src
 COPY web ./web
 COPY deploy ./deploy
-COPY docs/linux-node.md ./docs/linux-node.md
 COPY docs/reference/openapi.yaml ./docs/reference/openapi.yaml
 COPY docs/reference/fixtures ./docs/reference/fixtures
 # Contract tests assert the advertised verifier toolchain matches this file.
@@ -30,7 +33,10 @@ RUN apt-get update && apt-get install --yes --no-install-recommends binutils pyt
 
 # Independent-check toolchain only. Durable jobs reuse this stage; do not bake
 # Ruff, mypy, or pytest — the snapshot lockfile supplies those.
-FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS verifier-toolchain
+# Node 22.23.4 (20 Oct 2026, a security release): its bundled undici 6.29.1 fixes three High findings (S-20).
+# Debian 13: Debian 12 left Criticals in zlib and sqlite with no fix (S-20, Oct 2026). The
+# builder stays on Debian 12, so the Linux node binary keeps its glibc 2.36 floor.
+FROM node:22-trixie-slim@sha256:2117f713a417f3aff682ac8f5bc2ebbdf1beed51f36e67ab1e0fd3866b6d2d8f AS verifier-toolchain
 # The npm bundled with the base image carries advisories in its own dependencies.
 ARG NPM_VERSION=11.21.1
 COPY --from=ghcr.io/astral-sh/uv:0.12.24@sha256:3af4716e991d6956a41e573eab705d0ee08500cd829ed30293eb8472f372c65a /uv /usr/local/bin/uv

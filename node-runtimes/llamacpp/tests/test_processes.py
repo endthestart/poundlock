@@ -115,8 +115,16 @@ class RealCase(unittest.TestCase):
 
     # --- running the CLI ---
     def argv(self, *args: str) -> List[str]:
-        return [sys.executable, "-m", "poundlock_llamacpp", "--home", str(self.home),
-                "--manifest", str(self.manifest), *args]
+        return [
+            sys.executable,
+            "-m",
+            "poundlock_llamacpp",
+            "--home",
+            str(self.home),
+            "--manifest",
+            str(self.manifest),
+            *args,
+        ]
 
     def env(self) -> Dict[str, str]:
         env = {k: v for k, v in os.environ.items() if not k.startswith("POUNDLOCK_LLAMACPP")}
@@ -127,14 +135,24 @@ class RealCase(unittest.TestCase):
         # Piped output plus communicate() only returns once every holder of the pipe has
         # closed it, so a server that kept the pipe would time this out.
         return subprocess.run(
-            self.argv(*args), capture_output=True, text=True, timeout=timeout,
-            env=self.env(), stdin=subprocess.DEVNULL, start_new_session=True,
+            self.argv(*args),
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env=self.env(),
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
         )
 
     def popen_cli(self, *args: str) -> subprocess.Popen:
         process = subprocess.Popen(
-            self.argv(*args), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env=self.env(), stdin=subprocess.DEVNULL, start_new_session=True,
+            self.argv(*args),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=self.env(),
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
         )
         self.owned.append(process)
         return process
@@ -520,7 +538,7 @@ class SystemTests(unittest.TestCase):
         tmp = Path(tempfile.mkdtemp(prefix="llamacpp-version-"))
         self.addCleanup(shutil.rmtree, tmp, ignore_errors=True)
         probe = tmp / "llama-server"
-        probe.write_text("#!/bin/sh\necho \"version: 11200 ($EXAMPLE_LIBS)\"\n")
+        probe.write_text('#!/bin/sh\necho "version: 11200 ($EXAMPLE_LIBS)"\n')
         probe.chmod(0o755)
         output = detect_system().server_version(probe, {**os.environ, "EXAMPLE_LIBS": "abcdef012"})
         self.assertIn("(abcdef012)", output)
@@ -546,8 +564,12 @@ class SystemTests(unittest.TestCase):
         env = {"http_proxy": "http://127.0.0.1:9", "HTTP_PROXY": "http://127.0.0.1:9"}
         saved = {key: os.environ.get(key) for key in env}
         os.environ.update(env)
-        self.addCleanup(lambda: [os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
-                                 for k, v in saved.items()])
+        self.addCleanup(
+            lambda: [
+                os.environ.pop(k, None) if v is None else os.environ.__setitem__(k, v)
+                for k, v in saved.items()
+            ]
+        )
         with self.assertRaises(RequestFailed) as caught:
             system.http_json("GET", f"http://127.0.0.1:{free_port()}/health", timeout=1)
         self.assertNotIn("proxy", str(caught.exception).lower())

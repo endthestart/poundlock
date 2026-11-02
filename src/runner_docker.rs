@@ -1227,7 +1227,7 @@ mod tests {
         assert_eq!(output.compacted_events, 4);
         assert!(text.ends_with("removed repeated messages and tool results from 4 event(s); see message_end events for the complete assistant output\n"));
         // What Poundlock reads still reads the same.
-        assert!(!crate::harness::agent_turn_settled(&text));
+        assert!(!crate::harness::pi_outcome(&text).settled);
     }
 
     #[tokio::test]
@@ -1261,7 +1261,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pi_failure_still_detects_failure_after_stdout_filtering() {
+    async fn pi_outcome_still_detects_failure_after_stdout_filtering() {
         let mut stream = Vec::new();
         stream.extend(docker_frame(
             1,
@@ -1278,7 +1278,9 @@ mod tests {
         let output = captured(&capture);
         assert_eq!(output.omitted_stream_events, 1);
         let bounded = crate::harness::bounded_output(output.stdout, output.stderr, 4 * 1024 * 1024);
-        let failure = crate::harness::pi_failure(&bounded).expect("failure detected");
+        let failure = crate::harness::pi_outcome(&bounded)
+            .failure
+            .expect("failure detected");
         assert_eq!(failure["code"], "model_request_failed");
     }
 }

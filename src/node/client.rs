@@ -58,7 +58,7 @@ impl NodeClient {
                     "platform": std::env::consts::OS,
                     "os": std::env::consts::OS,
                     "arch": std::env::consts::ARCH,
-                    "agent_version": env!("CARGO_PKG_VERSION"),
+                    "agent_version": crate::VERSION,
                     "capabilities": capabilities
                 }),
             )

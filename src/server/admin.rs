@@ -31,6 +31,9 @@ async fn backup_status(
     }))
 }
 
+/// The newest jobs the console's overview lists.
+const OVERVIEW_JOB_LIMIT: u32 = 100;
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/overview", get(overview))
@@ -44,6 +47,7 @@ pub fn routes() -> Router<AppState> {
             axum::routing::patch(patch_endpoint).delete(delete_endpoint),
         )
         .route("/api/v1/endpoints/{id}/test", post(test_endpoint))
+        .route("/api/v1/endpoints/{id}/models", get(list_endpoint_models))
         .route(
             "/api/v1/endpoints/{id}/managed-identities/rotate",
             post(rotate_managed_identities),
@@ -61,7 +65,6 @@ pub fn routes() -> Router<AppState> {
             axum::routing::patch(patch_model).delete(delete_model),
         )
         .route("/api/v1/model-profiles/{id}/test", post(test_model))
-        .route("/api/v1/harness-profiles", get(list_harnesses))
         .route("/api/v1/projects", get(list_projects).post(create_project))
         .route(
             "/api/v1/projects/{id}",
@@ -72,13 +75,16 @@ pub fn routes() -> Router<AppState> {
 async fn overview(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     admin_auth(&state, &headers)?;
     Ok(Json(
-        json!({"version":env!("CARGO_PKG_VERSION"),"git_hosts":state.config.git_hosts,"outbound_network_allowed":state.config.allow_job_network,
+        json!({"version":crate::VERSION,"git_hosts":state.config.git_hosts,"outbound_network_allowed":state.config.allow_job_network,
         "endpoints":state.store.list_endpoints()?, "models":state.store.list_model_profiles()?,
         "harnesses":state.store.list_harness_profiles()?, "projects":state.store.list_projects()?,
         "nodes":state.store.list_nodes(state.config.node_offline_seconds)?,
         "api_tokens":state.store.list_api_tokens()?,
+        "token_permissions":crate::contract::token_permissions(),
         "managed_identities":state.store.managed_litellm_key_statuses()?,
-        "jobs":state.store.list_jobs(100)?,
+        "jobs":state.store.list_jobs(OVERVIEW_JOB_LIMIT)?,
+        "jobs_limit":OVERVIEW_JOB_LIMIT,
+        "build":option_env!("POUNDLOCK_BUILD_COMMIT").filter(|commit| !commit.is_empty()).map(|commit| &commit[..commit.len().min(7)]),
         "occupancy":state.occupancy.named_snapshot(&state.store.list_model_profiles()?)}),
     ))
 }
@@ -360,6 +366,9 @@ async fn delete_endpoint(
         .store
         .endpoint_secret(&id)?
         .ok_or_else(|| ApiError::not_found("endpoint not found"))?;
+    // Revoking cuts every application off the gateway, so it waits until removal can go
+    // ahead: a gateway its profiles still use stays, with its keys (UX audit, 28 Oct).
+    state.store.ensure_endpoint_unused(&id)?;
     if endpoint.endpoint.managed_identity.enabled {
         state
             .managed_identities
@@ -446,6 +455,27 @@ async fn test_endpoint(
     }
 }
 
+/// The server's own model list, for choosing a model. Unlike Test, it
+/// records nothing about the server's health.
+async fn list_endpoint_models(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Path(id): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let endpoint = state
+        .store
+        .endpoint_secret(&id)?
+        .ok_or_else(|| ApiError::not_found("endpoint not found"))?;
+    let body = state
+        .inference
+        .probe(&endpoint, "")
+        .await
+        .map_err(|error| {
+            ApiError::unavailable(state.inference.check_failure_message(&error, false))
+        })?;
+    Ok(Json(json!({"model_ids": body["model_ids"]})))
+}
+
 async fn list_models(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -454,11 +484,16 @@ async fn list_models(
     Ok(Json(state.store.list_model_profiles()?))
 }
 
+/// Whatever the request leaves out comes from the draft check, so every client
+/// gets the defaults the console shows.
 async fn create_model(
     State(state): State<AppState>,
     _admin: AdminAuth,
-    Json(mut input): Json<CreateModelProfile>,
+    Json(mut body): Json<serde_json::Map<String, Value>>,
 ) -> ApiResult<Json<ModelProfile>> {
+    super::model_draft::fill_omitted(&state, &mut body)?;
+    let mut input: CreateModelProfile = serde_json::from_value(Value::Object(body))
+        .map_err(|error| ApiError::unprocessable(format!("invalid model profile: {error}")))?;
     input.name = required(input.name, "profile name")?;
     input.model_id = required(input.model_id, "model ID")?;
     if input.idle_seconds.is_some_and(|s| s > 3600) {
@@ -587,7 +622,7 @@ async fn test_model(
         .ok_or_else(|| ApiError::not_found("endpoint not found"))?;
     if input.generate && endpoint.endpoint.managed_identity.enabled {
         return Err(ApiError::bad(
-            "Generate through an application token after access preflight; Poundlock does not use the LiteLLM administrative key for inference",
+            "Inference tests are off for a gateway with application keys, because Poundlock does not use the LiteLLM administrative key for inference. Set generate to false to check the listing, or send a request with an application token.",
         ));
     }
     let lease_id = uuid::Uuid::new_v4().to_string();
@@ -652,14 +687,6 @@ async fn test_model(
             Err(ApiError::unavailable(message))
         }
     }
-}
-
-async fn list_harnesses(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<Vec<HarnessProfile>>> {
-    admin_auth(&state, &headers)?;
-    Ok(Json(state.store.list_harness_profiles()?))
 }
 
 async fn list_projects(

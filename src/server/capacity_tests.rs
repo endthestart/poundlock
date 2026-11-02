@@ -251,6 +251,7 @@ fn recover_claims_preparing_and_running_jobs_in_order() {
             runtime_profile: Some("large-runtime".into()),
             idle_seconds: None,
             data_destination: "unknown".into(),
+            declare_server: false,
 
             thinking: "model_default".into(),
             thinking_budget_tokens: None,

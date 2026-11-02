@@ -112,11 +112,16 @@ async fn held_poll_serves_queued_actions_in_order_without_waiting() {
     let node = enroll(&state);
     let first = ensure(&state, &node, "lease-1");
     let second = ensure(&state, &node, "lease-2");
-    let app = router(state);
+    let app = router(state.clone());
     let started = Instant::now();
     for expected in [first.id, second.id] {
         let (_, body) = poll(app.clone(), &node, json!({"wait_seconds":20})).await;
         assert_eq!(body["id"], expected.as_str());
+        // A node finishes each action before it polls again.
+        state
+            .store
+            .complete_node_action(&node.id, &expected, true, json!({}))
+            .unwrap();
     }
     assert_eq!(started.elapsed(), Duration::ZERO);
 }

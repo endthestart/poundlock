@@ -219,69 +219,52 @@ fn add_endpoint(store: &Store, name: &str, key: &str) -> String {
 }
 
 #[test]
-fn secrets_from_before_binding_are_re_sealed_once_and_cannot_be_swapped() {
+fn a_secret_opens_only_in_its_own_row() {
     let directory = tempfile::tempdir().unwrap();
     let store = open(directory.path());
     let first = add_endpoint(&store, "first", "key-one");
     let second = add_endpoint(&store, "second", "key-two");
-    // Write the first key the way 0.1.x did: sealed without a binding.
-    let legacy = store.secrets.encrypt_unbound_for_test("key-one");
-    store_key(&store, &first, &legacy);
-    // As a 0.1.x database: no record that secrets were ever bound.
-    store
-        .connection()
-        .unwrap()
-        .execute("DELETE FROM store_meta", [])
-        .unwrap();
-    assert!(
-        store.endpoint_secret(&first).is_err(),
-        "unbound values never open"
-    );
-    drop(store);
-
-    let store = open(directory.path());
-    // The database as it was is kept for a rollback to 0.1.x.
-    let snapshot = directory.path().join("state.sqlite3.pre-secret-binding");
-    let before = rusqlite::Connection::open(&snapshot).unwrap();
-    let kept: String = before
-        .query_row(
-            "SELECT api_key_ciphertext FROM endpoints WHERE id=?1",
-            [&first],
-            |row| row.get(0),
-        )
-        .unwrap();
-    assert_eq!(kept, legacy);
-    let resealed = stored_key(&store, &first);
-    assert!(resealed.starts_with("v2."));
+    let sealed = stored_key(&store, &first);
+    assert!(sealed.starts_with("v2."));
     assert_eq!(
         store.endpoint_secret(&first).unwrap().unwrap().api_key,
         "key-one"
     );
-    drop(open(directory.path()));
-    assert_eq!(stored_key(&store, &first), resealed, "re-sealing runs once");
-
     // A ciphertext copied into another row does not open there.
-    store_key(&store, &second, &resealed);
+    store_key(&store, &second, &sealed);
     assert!(store.endpoint_secret(&second).is_err());
+    // Nor does a value sealed without its row, as 0.1.x wrote them.
+    let unbound = store.secrets.encrypt_unbound_for_test("key-one");
+    store_key(&store, &second, &unbound);
+    assert!(store.endpoint_secret(&second).is_err());
+}
 
-    // After the migration, an unbound value pasted in is refused, not re-sealed
-    // under the row it was pasted into.
-    let from_snapshot = store.secrets.encrypt_unbound_for_test("key-one");
-    store_key(&store, &second, &from_snapshot);
-    drop(store);
-    let secrets =
-        crate::crypto::SecretBox::load_or_create(&directory.path().join("master-key")).unwrap();
-    let refused = Store::open(&directory.path().join("state.sqlite3"), secrets)
-        .err()
+#[test]
+fn an_action_whose_poll_was_cut_goes_out_again_on_the_next_poll() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = open(directory.path());
+    let node = enroll(&store);
+    let release = store
+        .enqueue_action(
+            &node,
+            None,
+            "release",
+            json!({"runtime_profile":"coding","lease_id":"lease-1"}),
+        )
         .unwrap();
-    assert!(
-        refused.to_string().contains("sealed without their row"),
-        "{refused}"
+    assert_eq!(
+        store.poll_node_action(&node).unwrap().unwrap().id,
+        release.id
     );
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(&snapshot).unwrap().permissions().mode();
-        assert_eq!(mode & 0o777, 0o600);
-    }
+    // The reply never reached the node, which polls again having run nothing.
+    assert_eq!(
+        store.poll_node_action(&node).unwrap().unwrap().id,
+        release.id
+    );
+    assert!(
+        store
+            .complete_node_action(&node, &release.id, true, json!({}))
+            .unwrap()
+    );
+    assert!(store.poll_node_action(&node).unwrap().is_none());
 }

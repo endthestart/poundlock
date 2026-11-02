@@ -101,7 +101,7 @@ impl JobSource {
                     digest.update(&content);
                     bytes += content.len();
                 }
-                json!({"kind":"snapshot","files":files.len(),"bytes":bytes,"sha256":format!("{:x}",digest.finalize())})
+                json!({"kind":"snapshot","files":files.len(),"bytes":bytes,"sha256":crate::crypto::to_hex(&digest.finalize())})
             }
         }
     }

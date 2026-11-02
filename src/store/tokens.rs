@@ -24,6 +24,7 @@ impl Store {
             created_at: now(),
             last_used_at: None,
             revoked_at: None,
+            internal: input.name == OPERATOR_CHECK_TOKEN,
         };
         self.connection()?.execute(
             "INSERT INTO api_tokens
@@ -110,14 +111,12 @@ impl Store {
         .transpose()
     }
 
-    pub fn api_token_has_permission(&self, token: &str, permission: &str) -> Result<bool> {
-        Ok(self.authenticate_api_token(token, permission)?.is_some())
-    }
-
+    /// The active token's principal, when it holds `permission`; `None` for
+    /// `permission` accepts any active token.
     pub fn authenticate_api_token(
         &self,
         token: &str,
-        permission: &str,
+        permission: Option<&str>,
     ) -> Result<Option<ApiTokenPrincipal>> {
         if token.is_empty() {
             return Ok(None);
@@ -157,11 +156,7 @@ impl Store {
         let Some(principal) = authenticated else {
             return Ok(None);
         };
-        if !principal
-            .permissions
-            .iter()
-            .any(|candidate| candidate == permission)
-        {
+        if permission.is_some_and(|permission| !principal.has_permission(permission)) {
             return Ok(None);
         }
         // Shown to operators, never enforced. A write commits to disk, so it is
@@ -178,6 +173,26 @@ impl Store {
             params![now(), principal.id, stale_before],
         )?;
         Ok(Some(principal))
+    }
+
+    /// A new name and permissions for an active token; its secret, jobs and
+    /// managed keys stay, and the next request is checked against the change.
+    pub fn update_api_token(&self, id: &str, input: &CreateApiToken) -> Result<Option<ApiToken>> {
+        Ok(self
+            .connection()?
+            .query_row(
+                "UPDATE api_tokens SET name=?1,permissions_json=?2
+                 WHERE id=?3 AND revoked_at IS NULL AND name<>?4
+                 RETURNING id,name,permissions_json,created_at,last_used_at,revoked_at",
+                params![
+                    input.name,
+                    serde_json::to_string(&input.permissions)?,
+                    id,
+                    OPERATOR_CHECK_TOKEN
+                ],
+                token_row,
+            )
+            .optional()?)
     }
 
     pub fn revoke_api_token(&self, id: &str) -> Result<bool> {
@@ -230,9 +245,11 @@ fn token_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiToken> {
     let permissions = serde_json::from_str(&permissions).map_err(|error| {
         rusqlite::Error::FromSqlConversionFailure(2, rusqlite::types::Type::Text, error.into())
     })?;
+    let name: String = row.get(1)?;
     Ok(ApiToken {
         id: row.get(0)?,
-        name: row.get(1)?,
+        internal: name == OPERATOR_CHECK_TOKEN,
+        name,
         permissions,
         created_at: row.get(3)?,
         last_used_at: row.get(4)?,
@@ -241,46 +258,5 @@ fn token_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ApiToken> {
 }
 
 #[cfg(test)]
-mod reader_tests {
-    use crate::crypto::SecretBox;
-    use crate::domain::CreateApiToken;
-    use crate::store::Store;
-    use std::time::{Duration, Instant};
-
-    #[test]
-    fn a_token_check_does_not_wait_behind_a_write() {
-        let directory = tempfile::tempdir().unwrap();
-        let secrets = SecretBox::load_or_create(&directory.path().join("master-key")).unwrap();
-        let store = Store::open(&directory.path().join("state.sqlite3"), secrets).unwrap();
-        let issued = store
-            .create_api_token(&CreateApiToken {
-                name: "client".into(),
-                permissions: vec!["inference:invoke".into()],
-            })
-            .unwrap();
-        // The first check records last use; the next ones only read.
-        assert!(
-            store
-                .authenticate_api_token(&issued.token, "inference:invoke")
-                .unwrap()
-                .is_some()
-        );
-        let held = store.connection().unwrap();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        let checker = store.clone();
-        let token = issued.token.clone();
-        std::thread::spawn(move || {
-            let started = Instant::now();
-            let found = checker
-                .authenticate_api_token(&token, "inference:invoke")
-                .unwrap();
-            sender.send((found.is_some(), started.elapsed())).unwrap();
-        });
-        let (found, elapsed) = receiver
-            .recv_timeout(Duration::from_secs(2))
-            .expect("the token check waited for the held writer");
-        drop(held);
-        assert!(found, "the token was not recognised");
-        assert!(elapsed < Duration::from_secs(1), "{elapsed:?}");
-    }
-}
+#[path = "tokens_tests.rs"]
+mod tests;

@@ -28,6 +28,7 @@ case "$operation" in help|--help|-h) usage; exit 0;; install|upgrade|doctor|roll
 for tool in systemctl systemd-inhibit runuser sha256sum install realpath getent flock pkcheck useradd; do command -v "$tool" >/dev/null || fail "Required command missing: $tool"; done
 exec 9>/run/lock/poundlock-node-install.lock
 flock -n 9 || fail 'Another node installation operation is running.'
+# shellcheck disable=SC1007 # deliberate: each option starts empty until parsed below
 node_user= binary= digest= config=
 while (( $# )); do
   [[ $# -ge 2 ]] || fail "Missing value for $1"
@@ -169,7 +170,7 @@ if [[ $operation == account ]]; then
     printf 'The node does not pass doctor as %s. Models or a runtime under a home folder need a login account: sudo bash poundlock-node.sh account --user %s\n' "$node_user" "$saved_user" >&2
     exit 1
   fi
-  printf 'The node now runs as %s. Test a model with Generate in Setup.\n' "$node_user"
+  printf 'The node now runs as %s. Check a model with Test inference on Models.\n' "$node_user"
   exit 0
 fi
 if [[ $operation == resume ]]; then
@@ -256,4 +257,4 @@ if ! node node-doctor; then
   printf 'Installed, but validation failed. Run doctor and inspect journalctl -u poundlock-node.service. A failed upgrade can be reverted with rollback.\n' >&2
   exit 1
 fi
-printf 'Node installed. Confirm Online in Machines, then test the model using Generate in Setup.\n'
+printf 'Node installed. Confirm Online in Machines, then use Test inference on Models.\n'

@@ -6,41 +6,7 @@ use http_body_util::BodyExt;
 use tower::ServiceExt;
 
 fn state() -> (tempfile::TempDir, AppState) {
-    let directory = tempfile::tempdir().unwrap();
-    let secrets =
-        crate::crypto::SecretBox::load_or_create(&directory.path().join("master-key")).unwrap();
-    let store = Store::open(&directory.path().join("poundlock.sqlite3"), secrets.clone()).unwrap();
-    let config = AppConfig {
-        allow_job_network: false,
-        wake_socket: None,
-        git_hosts: vec!["github.com".into()],
-        bind: "127.0.0.1:0".parse().unwrap(),
-        data_dir: directory.path().join("data"),
-        runtime_dir: directory.path().join("runtime"),
-        projects_dir: directory.path().join("projects"),
-        work_dir: directory.path().join("work"),
-        admin_token: "admin-secret".into(),
-        runner_token: "runner-secret".into(),
-        secrets,
-        external_timeout_seconds: 30,
-        job_inference_timeout_seconds: 30,
-        node_offline_seconds: 15,
-        client_artifacts_dir: None,
-        max_active_jobs_per_token: 10,
-        max_requests_in_flight: 512,
-        capacity_default_wait_seconds: 0,
-        openrouter_catalog: crate::config::CatalogMode::OnRequest,
-        backup: None,
-    };
-    let state = AppState {
-        config: Arc::new(config),
-        managed_identities: crate::litellm::ManagedIdentityManager::new(store.clone()).unwrap(),
-        store,
-        inference: InferenceClient::new(30).unwrap(),
-        occupancy: capacity::Occupancy::new(),
-        runners: Default::default(),
-    };
-    (directory, state)
+    ops_tests::test_state(|_| {})
 }
 
 #[test]
@@ -309,10 +275,11 @@ fn the_ui_has_no_inline_script_style_or_handlers() {
     let sources = [
         html,
         include_str!("../../web/app.js"),
+        include_str!("../../web/access.js"),
         include_str!("../../web/jobs.js"),
         include_str!("../../web/connections.js"),
         include_str!("../../web/models.js"),
-        include_str!("../../web/gateway-handoff.js"),
+        include_str!("../../web/route-add.js"),
         include_str!("../../web/machines.js"),
         include_str!("../../web/theme-boot.js"),
     ];

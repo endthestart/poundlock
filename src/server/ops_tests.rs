@@ -6,44 +6,49 @@ use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use tower::ServiceExt;
 
-pub(super) fn state_with_artifacts(
-    artifacts: Option<std::path::PathBuf>,
-) -> (tempfile::TempDir, AppState) {
+/// The controller state every server test starts from: a fresh database in a
+/// temporary folder and a config with fixed test tokens. `configure` adjusts
+/// the config before the state is built.
+pub(crate) fn test_state(configure: impl FnOnce(&mut AppConfig)) -> (tempfile::TempDir, AppState) {
     let directory = tempfile::tempdir().unwrap();
     let secrets =
         crate::crypto::SecretBox::load_or_create(&directory.path().join("master-key")).unwrap();
     let store = Store::open(&directory.path().join("poundlock.sqlite3"), secrets.clone()).unwrap();
-    let config = AppConfig {
+    let mut config = AppConfig {
         allow_job_network: false,
         wake_socket: None,
         git_hosts: vec!["github.com".into()],
         bind: "127.0.0.1:0".parse().unwrap(),
         data_dir: directory.path().join("data"),
-        runtime_dir: directory.path().join("runtime"),
-        projects_dir: directory.path().join("projects"),
-        work_dir: directory.path().join("work"),
         admin_token: "admin-secret".into(),
         runner_token: "runner-secret".into(),
         secrets,
         external_timeout_seconds: 30,
         job_inference_timeout_seconds: 30,
         node_offline_seconds: 15,
-        client_artifacts_dir: artifacts,
+        client_artifacts_dir: None,
         max_active_jobs_per_token: 10,
         max_requests_in_flight: 512,
         capacity_default_wait_seconds: 0,
         openrouter_catalog: crate::config::CatalogMode::OnRequest,
         backup: None,
     };
+    configure(&mut config);
     let state = AppState {
         config: Arc::new(config),
         managed_identities: crate::litellm::ManagedIdentityManager::new(store.clone()).unwrap(),
         store,
-        inference: InferenceClient::new(30).unwrap(),
+        inference: InferenceClient::new().unwrap(),
         occupancy: capacity::Occupancy::new(),
         runners: Default::default(),
     };
     (directory, state)
+}
+
+pub(super) fn state_with_artifacts(
+    artifacts: Option<std::path::PathBuf>,
+) -> (tempfile::TempDir, AppState) {
+    test_state(|config| config.client_artifacts_dir = artifacts)
 }
 
 pub(super) async fn send(
@@ -228,6 +233,78 @@ async fn wake_mac_must_belong_to_an_interface_the_machine_reports() {
     )
     .await;
     assert_eq!(status, StatusCode::OK);
+}
+
+#[tokio::test]
+async fn job_list_rows_carry_the_verification_status() {
+    // List rows leave the result out, so the console called every finished job
+    // "Unverified" (UX audit, 28 Oct).
+    use crate::domain::*;
+    let (_directory, state) = state_with_artifacts(None);
+    let endpoint = state
+        .store
+        .create_endpoint(&serde_json::from_value(endpoint_body()).unwrap())
+        .unwrap();
+    let model = state
+        .store
+        .create_model_profile(
+            &serde_json::from_value(json!({
+                "name":"test", "endpoint_id":endpoint.id, "model_id":"test",
+                "context_tokens":8192, "max_output_tokens":1024,
+                "workload_class":"durable-coding-agent", "wake_policy":"never"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let project = state
+        .store
+        .create_project(&CreateProject {
+            name: "test".into(),
+            roots: vec!["repo".into()],
+            instruction_files: vec![],
+        })
+        .unwrap();
+    let job = state
+        .store
+        .submit_job(&SubmitJob {
+            source: None,
+            idempotency_key: "verified".into(),
+            policy: Default::default(),
+            project_id: project.id,
+            model_profile_id: model.id,
+            harness_profile_id: "pi".into(),
+            prompt: "test".into(),
+        })
+        .unwrap();
+    state
+        .store
+        .set_job_status(&job.id, "ready", "ready", "ready")
+        .unwrap();
+    state.store.claim_runner_job(None).unwrap();
+    let report = json!({"patches":[],"output":"done","cleanup":{},
+        "provenance":{"verification":{"status":"passed"}}});
+    let uri = format!("/runner/v1/jobs/{}/complete", job.id);
+    let (status, response) =
+        send(router(state.clone()), "POST", &uri, "runner-secret", report).await;
+    assert_eq!(status, StatusCode::OK, "{response}");
+    let listed = state.store.list_jobs(100).unwrap();
+    assert_eq!(listed[0].verification.as_deref(), Some("passed"));
+    let (_, overview) = send(
+        router(state),
+        "GET",
+        "/api/v1/overview",
+        "admin-secret",
+        json!({}),
+    )
+    .await;
+    assert_eq!(overview["jobs"][0]["verification"], "passed");
+    // List rows carry no policy, result or error: the job itself does.
+    for field in ["policy", "result", "error"] {
+        assert!(
+            overview["jobs"][0].get(field).is_none(),
+            "{field} in a list row"
+        );
+    }
 }
 
 #[tokio::test]
@@ -569,8 +646,49 @@ async fn managed_litellm_setup_validates_key_management_separately() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert_eq!(
         error["error"]["message"],
-        "Generate through an application token after access preflight; Poundlock does not use the LiteLLM administrative key for inference"
+        "Inference tests are off for a gateway with application keys, because Poundlock does not use the LiteLLM administrative key for inference. Set generate to false to check the listing, or send a request with an application token."
     );
+
+    // Removing the gateway while a profile uses it is refused before any client key is
+    // revoked: revoking first cut every application off a gateway that then stayed.
+    let issued = state
+        .store
+        .create_api_token(&crate::domain::CreateApiToken {
+            name: "gateway client".into(),
+            permissions: vec!["models:read".into(), "inference:invoke".into()],
+        })
+        .unwrap();
+    let now = chrono::Utc::now().to_rfc3339();
+    state
+        .store
+        .save_managed_litellm_key(&crate::domain::ManagedLiteLlmKey {
+            api_token_id: issued.details.id.clone(),
+            endpoint_id: id.to_owned(),
+            virtual_key: "sk-client".into(),
+            virtual_key_hash: "hash".into(),
+            remote_key_id: None,
+            policy_hash: "policy".into(),
+            status: "active".into(),
+            last_error: None,
+            created_at: now.clone(),
+            updated_at: now,
+        })
+        .unwrap();
+    let (status, refused) = send(
+        app.clone(),
+        "DELETE",
+        &format!("/api/v1/endpoints/{id}"),
+        "admin-secret",
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{refused}");
+    assert_eq!(
+        refused["error"]["message"],
+        "Remove or move this endpoint's model profiles first"
+    );
+    let keys = state.store.managed_litellm_keys_for_endpoint(id).unwrap();
+    assert_eq!(keys[0].status, "active");
 
     let missing = json!({
         "name":"missing-management",
@@ -672,6 +790,7 @@ async fn update_manifest_and_binary_use_client_artifacts() {
     assert_eq!(body["sha256"], expected);
     assert_eq!(body["os"], "macos");
     let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri(format!("/node/v1/nodes/{}/update/binary", enrolled.node_id))
@@ -682,6 +801,27 @@ async fn update_manifest_and_binary_use_client_artifacts() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-poundlock-sha256"], expected.as_str());
+    assert!(response.headers().get("content-disposition").is_none());
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(&bytes[..], payload);
+    // The operator's download is the same file, named for saving.
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/v1/nodes/binaries/macos/aarch64")
+                .header(AUTHORIZATION, "Bearer admin-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-poundlock-sha256"], expected.as_str());
+    assert_eq!(
+        response.headers()["content-disposition"],
+        "attachment; filename=\"poundlock-macos-aarch64\""
+    );
     let bytes = response.into_body().collect().await.unwrap().to_bytes();
     assert_eq!(&bytes[..], payload);
 }
@@ -763,7 +903,7 @@ async fn an_uploaded_signature_is_kept_only_for_a_served_binary_of_this_version(
             json!([{"manifest": manifest, "signature": "c2lnbmF0dXJl"}]),
         )
     };
-    let version = env!("CARGO_PKG_VERSION");
+    let version = crate::VERSION;
     let manifest =
         json!({"os":"macos","arch":"aarch64","version":version,"sha256":sha256}).to_string();
     assert_eq!(
@@ -1881,21 +2021,20 @@ async fn model_profile_uses_accepts_legacy_input_and_rejects_conflicts() {
         StatusCode::BAD_REQUEST
     );
 
-    // Neither `uses` nor `workload_class` is rejected.
+    // Neither `uses` nor `workload_class` takes the draft check's default,
+    // as the console shows it.
     let mut missing = base.clone();
     missing["name"] = json!("missing");
-    assert_eq!(
-        send(
-            app.clone(),
-            "POST",
-            "/api/v1/model-profiles",
-            "admin-secret",
-            missing
-        )
-        .await
-        .0,
-        StatusCode::BAD_REQUEST
-    );
+    let (status, missing) = send(
+        app.clone(),
+        "POST",
+        "/api/v1/model-profiles",
+        "admin-secret",
+        missing,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{missing}");
+    assert_eq!(missing["uses"], json!(crate::domain::DEFAULT_MODEL_USES));
 
     // PATCH can widen `uses`, deriving a new primary workload_class.
     let path = format!("/api/v1/model-profiles/{}", legacy["id"].as_str().unwrap());

@@ -158,12 +158,18 @@ pub(super) fn advertised_model(
         "id": id,
         "object": "model",
         "owned_by": "poundlock",
+        // Aliases for clients; `poundlock` below holds the canonical values.
+        // OpenRouter's name for the context size; Dispatch falls back to it.
         "context_length": profile.context_tokens,
+        // No reader known in Dispatch, Toolkit or a documented client.
         "context_window": profile.context_tokens,
+        // Dispatch reads it when `poundlock.context_tokens` is absent.
         "context_tokens": profile.context_tokens,
         "max_output_tokens": profile.max_output_tokens,
+        // Dispatch reads these two when `poundlock` lacks them.
         "busy": busy,
         "occupancy": occupancy_json.clone(),
+        // No reader known in Dispatch, Toolkit or a documented client.
         "meta": {"n_ctx": profile.context_tokens},
         "poundlock": {
             // Every row is a profile: `id` is the profile's own name, and the
@@ -185,6 +191,8 @@ pub(super) fn advertised_model(
             "wake_policy": profile.wake_policy,
             "context_tokens": profile.context_tokens,
             "max_output_tokens": profile.max_output_tokens,
+            // An alias of `context_tokens`; no reader known in Dispatch, Toolkit
+            // or a documented client.
             "n_ctx": profile.context_tokens,
             // Measured evidence, augmented at read time with age_days, stale
             // and settings_match. Empty means unknown, never capable.
@@ -1207,6 +1215,17 @@ pub(super) fn constrain_interactive_request(
             "unsupported inference option: {unsupported}"
         )));
     }
+    constrain_request(fields, profile)
+}
+
+/// The checks the relay and job inference share once each has vetted the
+/// options: the reasoning choice, the thinking budget, one completion, and one
+/// output token limit within the profile's budget, which is filled in when the
+/// request names none.
+pub(super) fn constrain_request(
+    fields: &mut serde_json::Map<String, Value>,
+    profile: &ModelProfile,
+) -> ApiResult<()> {
     if let Some(message) = unsupported_reasoning(fields, profile) {
         return Err(ApiError::bad_code("unsupported_reasoning_effort", message));
     }
@@ -1228,9 +1247,7 @@ pub(super) fn constrain_interactive_request(
         Some(value) => value
             .as_u64()
             .filter(|n| *n > 0 && *n <= profile.max_output_tokens)
-            .ok_or_else(|| {
-                ApiError::bad("output token limit exceeds the advertised model budget")
-            })?,
+            .ok_or_else(|| ApiError::bad("output token limit exceeds the model budget"))?,
         None => profile.max_output_tokens,
     };
     fields.insert(key.into(), json!(limit));

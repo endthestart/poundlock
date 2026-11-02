@@ -1,7 +1,8 @@
 {
   "schema_version": 1,
   "runtime": {
-    "sweeper": "detached"
+    "sweeper": "detached",
+    "keep_awake": true
   },
   "profiles": {
     "example-27b-mtp": {

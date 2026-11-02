@@ -35,8 +35,10 @@ impl Drop for LeaseInhibitor {
 
 pub(super) async fn acquire(lease: &str) -> Result<Option<LeaseInhibitor>> {
     let mut command = if cfg!(target_os = "macos") {
+        // Keep the machine awake but let the displays sleep: a display kept on
+        // holds its GPU compositing while that GPU also serves the model (23 Oct).
         let mut command = Command::new("/usr/bin/caffeinate");
-        command.args(["-dimsu"]);
+        command.args(["-ims"]);
         command
     } else if cfg!(target_os = "linux") {
         let mut command = Command::new("systemd-inhibit");
@@ -63,10 +65,8 @@ pub(super) async fn acquire(lease: &str) -> Result<Option<LeaseInhibitor>> {
     command
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .kill_on_drop(true);
-    #[cfg(unix)]
-    command.process_group(0);
+        .stderr(Stdio::null());
+    crate::process::isolate(&mut command);
     let child = command.spawn().context("Start sleep inhibitor")?;
     let mut held = LeaseInhibitor {
         child,

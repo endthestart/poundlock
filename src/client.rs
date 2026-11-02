@@ -20,7 +20,7 @@ pub struct InferenceClient {
 }
 
 impl InferenceClient {
-    pub fn new(_timeout_seconds: u64) -> Result<Self> {
+    pub fn new() -> Result<Self> {
         // Outer wake/prepare may last minutes. Identity stays short so
         // wait_for_model can retry; Generate is a single bounded check.
         Self::with_timeouts(

@@ -45,8 +45,29 @@ class LinuxCase(unittest.TestCase):
         base = self.proc / str(pid)
         base.mkdir()
         # Field 2 is the command in parentheses and may itself contain ") " and spaces.
-        fields = [state, "1", "1", "1", "0", "-1", "0", "0", "0", "0", "0", "0", "0", "0", "0",
-                  "20", "0", "1", "0", str(start), "0"]
+        fields = [
+            state,
+            "1",
+            "1",
+            "1",
+            "0",
+            "-1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "20",
+            "0",
+            "1",
+            "0",
+            str(start),
+            "0",
+        ]
         (base / "stat").write_text(f"{pid} ({comm} (x) y) " + " ".join(fields) + "\n")
         (base / "comm").write_text(comm + "\n")
         (base / "cmdline").write_bytes(b"\0".join(part.encode() for part in argv) + b"\0")
@@ -99,12 +120,22 @@ class LinuxProcessTests(LinuxCase):
     def test_a_script_binary_is_recognised_by_its_interpreter_command(self) -> None:
         script = self.tmp / "opt" / "server-script"
         script.write_text("#!/usr/bin/env python3\n")
-        info = ProcessInfo(14, "1", f"/usr/bin/python3 {script} --port 1",
-                           ("/usr/bin/python3", str(script), "--port", "1"), "/usr/bin/python3")
+        info = ProcessInfo(
+            14,
+            "1",
+            f"/usr/bin/python3 {script} --port 1",
+            ("/usr/bin/python3", str(script), "--port", "1"),
+            "/usr/bin/python3",
+        )
         self.assertTrue(self.system.runs_binary(info, script))
         self.assertFalse(self.system.runs_binary(info, self.binary))
-        elf_info = ProcessInfo(15, "1", f"/usr/bin/python3 {self.binary}",
-                               ("/usr/bin/python3", str(self.binary)), "/usr/bin/python3")
+        elf_info = ProcessInfo(
+            15,
+            "1",
+            f"/usr/bin/python3 {self.binary}",
+            ("/usr/bin/python3", str(self.binary)),
+            "/usr/bin/python3",
+        )
         self.assertFalse(self.system.runs_binary(elf_info, self.binary), "only #! files count as scripts")
 
     def test_find_processes_matches_the_name_exactly_and_skips_zombies(self) -> None:
@@ -129,8 +160,11 @@ class LinuxSettingsTests(LinuxCase):
     ) -> None:
         device = self.sys / "class" / "drm" / name / "device"
         device.mkdir(parents=True)
-        for filename, value in (("mem_info_vram_used", used), ("mem_info_vram_total", total),
-                                ("mem_info_gtt_used", gtt)):
+        for filename, value in (
+            ("mem_info_vram_used", used),
+            ("mem_info_vram_total", total),
+            ("mem_info_gtt_used", gtt),
+        ):
             if value is not None:
                 (device / filename).write_text(f"{value}\n")
 
@@ -164,10 +198,28 @@ class LinuxSettingsTests(LinuxCase):
                 Path.home() / ".local" / "state" / "poundlock-llamacpp", self.system.default_home()
             )
 
-    def test_linux_sweeps_with_a_detached_process_and_never_caffeinates(self) -> None:
+    def test_linux_sweeps_with_a_detached_process(self) -> None:
         self.assertEqual("detached", self.system.default_sweeper)
-        self.assertFalse(self.system.supports_caffeinate)
-        self.assertIsNone(self.system.caffeinate_command(1))
+
+    def test_linux_keeps_awake_with_systemd_inhibit_until_the_server_exits(self) -> None:
+        tools = {"systemd-inhibit": "/usr/bin/systemd-inhibit", "tail": "/usr/bin/tail"}
+        with mock.patch("poundlock_llamacpp.linux.shutil.which", side_effect=tools.get):
+            system = LinuxSystem(proc_root=self.proc, sysfs_root=self.sys)
+            command = system.keep_awake_command(42)
+        self.assertTrue(system.supports_keep_awake)
+        assert command is not None
+        inhibit = [i for i, part in enumerate(command) if part == "/usr/bin/systemd-inhibit"]
+        self.assertEqual(2, len(inhibit))
+        self.assertIn("--what=sleep", command[inhibit[0] : inhibit[1]])
+        self.assertIn("--what=idle", command[inhibit[1] :])
+        self.assertEqual(["/usr/bin/tail", "--pid=42", "-f", "/dev/null"], command[-4:])
+        self.assertEqual(2, command.count("--mode=block"))
+
+    def test_linux_without_systemd_inhibit_cannot_keep_awake(self) -> None:
+        with mock.patch("poundlock_llamacpp.linux.shutil.which", side_effect={"tail": "/usr/bin/tail"}.get):
+            system = LinuxSystem(proc_root=self.proc, sysfs_root=self.sys)
+            self.assertFalse(system.supports_keep_awake)
+            self.assertIsNone(system.keep_awake_command(42))
 
 
 class MacTests(unittest.TestCase):
@@ -196,8 +248,10 @@ class MacTests(unittest.TestCase):
         with mock.patch.object(system, "_run", return_value=self.PS) as run:
             info = system.inspect(5)
         assert info is not None
-        self.assertEqual(["/bin/ps", "-ww", "-p", "5", "-o", "stat=", "-o", "lstart=", "-o", "command="],
-                         run.call_args[0][0])
+        self.assertEqual(
+            ["/bin/ps", "-ww", "-p", "5", "-o", "stat=", "-o", "lstart=", "-o", "command="],
+            run.call_args[0][0],
+        )
         with mock.patch.object(system, "_run", return_value=None):
             self.assertIsNone(system.inspect(5))
         self.assertIsNone(system.inspect(0))
@@ -239,7 +293,7 @@ class MacTests(unittest.TestCase):
     def test_mac_settings(self) -> None:
         system = MacSystem()
         self.assertEqual("external", system.default_sweeper)
-        self.assertEqual(["/usr/bin/caffeinate", "-dimsu", "-w", "99"], system.caffeinate_command(99))
+        self.assertEqual(["/usr/bin/caffeinate", "-ims", "-w", "99"], system.keep_awake_command(99))
         self.assertEqual({}, system.server_environment(Path("/x")))
         self.assertTrue(str(system.default_home()).endswith("Library/Application Support/poundlock-llamacpp"))
         self.assertEqual([], system.gpu_memory())
@@ -278,8 +332,10 @@ class LaunchdTests(unittest.TestCase):
         self.assertEqual(
             [
                 "/usr/local/bin/poundlock-llamacpp",
-                "--home", "/Users/x/Library/Application Support/poundlock-llamacpp",
-                "--manifest", "/etc/manifest & more.json",
+                "--home",
+                "/Users/x/Library/Application Support/poundlock-llamacpp",
+                "--manifest",
+                "/etc/manifest & more.json",
                 "sweep",
             ],
             data["ProgramArguments"],

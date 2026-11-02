@@ -106,6 +106,7 @@ pub(super) async fn collect(data_dir: &Path, identities: &HashMap<String, Vec<St
                         "name":gpu["sppci_model"].as_str().map(clean),
                         "vendor":gpu["spdisplays_vendor"].as_str().map(clean),
                         "vram":gpu["spdisplays_vram"].as_str().or(gpu["spdisplays_vram_shared"].as_str()).map(clean),
+                        "vram_bytes":gpu["spdisplays_vram"].as_str().and_then(vram_bytes),
                         "metal":gpu["spdisplays_metal"].as_str().map(clean)
                     })).collect::<Vec<_>>());
         }
@@ -120,6 +121,19 @@ pub(super) async fn collect(data_dir: &Path, identities: &HashMap<String, Vec<St
         .push("Installed software and GPU detection do not verify inference or wake support.");
     inventory["limitations"] = json!(limitations);
     inventory
+}
+
+/// System Profiler's dedicated VRAM, "16 GB" or "512 MB". Video memory comes in
+/// binary sizes, so its GB is GiB: the W5700X's "16 GB" is 16 GiB.
+#[cfg(any(target_os = "macos", test))]
+fn vram_bytes(text: &str) -> Option<u64> {
+    let (amount, unit) = text.trim().split_once(' ')?;
+    let amount: u64 = amount.parse().ok()?;
+    match unit {
+        "GB" => amount.checked_mul(1 << 30),
+        "MB" => amount.checked_mul(1 << 20),
+        _ => None,
+    }
 }
 
 fn clean(raw: &str) -> String {
@@ -534,6 +548,12 @@ fn linux_gpus(root: &Path) -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn macos_vram_is_read_in_binary_units() {
+        assert_eq!(vram_bytes("16 GB"), Some(17179869184));
+        assert_eq!(vram_bytes("512 MB"), Some(536870912));
+        assert_eq!(vram_bytes("unknown"), None);
+    }
     #[test]
     fn linux_inventory_uses_allowlisted_fields_and_reports_gpu_without_optional_tools() {
         let root = tempfile::tempdir().unwrap();

@@ -24,7 +24,9 @@ INSTALL = DEPLOY / "install.sh"
 def run_install(*args: str) -> subprocess.CompletedProcess:
     return subprocess.run(
         ["bash", str(INSTALL), "--python", sys.executable, *args],
-        capture_output=True, text=True, timeout=60,
+        capture_output=True,
+        text=True,
+        timeout=60,
     )
 
 
@@ -55,9 +57,20 @@ class InstallerTests(unittest.TestCase):
         manifest.write_text('{"schema_version": 1, "profiles": {}}')
         manifest.chmod(0o600)
         result = subprocess.run(
-            [str(self.binary), "--home", str(self.tmp / "home"), "--manifest", str(manifest),
-             "ensure", "model", "not-a-uuid", str(uuid4())],
-            capture_output=True, text=True, timeout=30,
+            [
+                str(self.binary),
+                "--home",
+                str(self.tmp / "home"),
+                "--manifest",
+                str(manifest),
+                "ensure",
+                "model",
+                "not-a-uuid",
+                str(uuid4()),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
         )
         self.assertEqual(2, result.returncode, result.stderr)
         self.assertEqual("ManagerError", json.loads(result.stderr)["error"])
@@ -76,24 +89,39 @@ class InstallerTests(unittest.TestCase):
     def test_launchd_job_is_written_with_the_neutral_label(self) -> None:
         agents = self.tmp / "agents"
         result = run_install(
-            "--prefix", str(self.prefix), "--launchd", "--no-load",
-            "--launch-agents", str(agents),
-            "--home", str(self.tmp / "home dir"), "--manifest", str(self.tmp / "m.json"),
+            "--prefix",
+            str(self.prefix),
+            "--launchd",
+            "--no-load",
+            "--launch-agents",
+            str(agents),
+            "--home",
+            str(self.tmp / "home dir"),
+            "--manifest",
+            str(self.tmp / "m.json"),
         )
         self.assertEqual(0, result.returncode, result.stderr)
         job = plistlib.loads((agents / "com.poundlock.llamacpp.plist").read_bytes())
         self.assertEqual("com.poundlock.llamacpp", job["Label"])
         self.assertEqual(str(self.binary), job["ProgramArguments"][0])
         self.assertEqual(str(self.tmp / "home dir"), job["ProgramArguments"][2])
-        removed = run_install("--uninstall", "--prefix", str(self.prefix), "--launchd",
-                              "--no-load", "--launch-agents", str(agents))
+        removed = run_install(
+            "--uninstall",
+            "--prefix",
+            str(self.prefix),
+            "--launchd",
+            "--no-load",
+            "--launch-agents",
+            str(agents),
+        )
         self.assertEqual(0, removed.returncode, removed.stderr)
         self.assertFalse((agents / "com.poundlock.llamacpp.plist").exists())
 
     def test_relative_or_missing_python_is_refused(self) -> None:
         result = subprocess.run(
             ["bash", str(INSTALL), "--prefix", str(self.prefix), "--python", "python3"],
-            capture_output=True, text=True,
+            capture_output=True,
+            text=True,
         )
         self.assertNotEqual(0, result.returncode)
         self.assertFalse(self.binary.exists())
@@ -130,8 +158,15 @@ class InstalledRuntimeTests(RealCase):
         env = {k: v for k, v in os.environ.items() if k != "PYTHONPATH"}  # nothing but the .pyz
 
         def run(*args: str) -> subprocess.CompletedProcess:
-            return subprocess.run([*base, *args], capture_output=True, text=True, timeout=60,
-                                  env=env, stdin=subprocess.DEVNULL, start_new_session=True)
+            return subprocess.run(
+                [*base, *args],
+                capture_output=True,
+                text=True,
+                timeout=60,
+                env=env,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+            )
 
         lease = str(uuid4())
         ready = run("ensure", ALIAS, lease, str(uuid4()))

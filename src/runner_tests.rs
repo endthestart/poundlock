@@ -265,7 +265,7 @@ async fn claim_reports_the_runners_configured_wall_seconds() {
 // B2: a wall-deadline cutoff must be reported as `wall_budget_after_turn`
 // when the agent's own final turn had already settled, and
 // `wall_budget_mid_turn` otherwise — mirroring `output_limit_after_turn`/
-// `output_limit_mid_turn` (`harness::agent_turn_settled`'s own tests cover
+// `output_limit_mid_turn` (`harness::pi_outcome`'s own tests cover
 // what "settled" means; this covers the mapping to a code and message).
 #[test]
 fn wall_budget_code_distinguishes_a_settled_turn_from_a_mid_turn_cutoff() {

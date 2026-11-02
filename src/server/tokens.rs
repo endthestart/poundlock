@@ -1,8 +1,9 @@
 use super::{AdminAuth, ApiError, ApiResult, AppState, admin_auth};
 use crate::domain::{API_TOKEN_PERMISSIONS, ApiToken, CreateApiToken, IssuedApiToken};
+use crate::store::OPERATOR_CHECK_TOKEN;
 use axum::extract::{Path, State};
 use axum::http::HeaderMap;
-use axum::routing::{get, post};
+use axum::routing::{get, patch, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -11,20 +12,20 @@ use std::collections::HashSet;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/api/v1/api-tokens", get(list_tokens).post(create_token))
+        .route("/api/v1/api-tokens/{id}", patch(update_token))
         .route("/api/v1/api-tokens/{id}/revoke", post(revoke_token))
         .route("/api/v1/capabilities", get(capabilities))
         .route("/api/v1/access/preflight", post(preflight))
         .route("/api/v1/usage", get(usage))
 }
 
-async fn capabilities(
-    State(_state): State<AppState>,
-    headers: HeaderMap,
-) -> ApiResult<Json<Value>> {
-    let _principal = super::api_token_auth(&_state, &headers, "models:read")?;
-    Ok(Json(crate::contract::capabilities_document(env!(
-        "CARGO_PKG_VERSION"
-    ))))
+/// Readable with any active token: a token that lacks a permission still learns
+/// what to call it.
+async fn capabilities(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
+    let principal = super::any_api_token_auth(&state, &headers)?;
+    let mut document = crate::contract::capabilities_document(crate::VERSION);
+    document["caller_permissions"] = json!(principal.permissions);
+    Ok(Json(document))
 }
 
 #[derive(Deserialize)]
@@ -45,27 +46,51 @@ async fn list_tokens(
 async fn create_token(
     State(state): State<AppState>,
     _admin: AdminAuth,
-    Json(mut input): Json<CreateApiToken>,
+    Json(input): Json<CreateApiToken>,
 ) -> ApiResult<Json<IssuedApiToken>> {
+    Ok(Json(state.store.create_api_token(&validated(input)?)?))
+}
+
+async fn update_token(
+    State(state): State<AppState>,
+    _admin: AdminAuth,
+    Path(id): Path<String>,
+    Json(input): Json<CreateApiToken>,
+) -> ApiResult<Json<ApiToken>> {
+    state
+        .store
+        .update_api_token(&id, &validated(input)?)?
+        .map(Json)
+        .ok_or_else(|| ApiError::not_found("active API token not found"))
+}
+
+fn validated(mut input: CreateApiToken) -> ApiResult<CreateApiToken> {
     input.name = input.name.trim().to_owned();
     if input.name.is_empty() || input.name.len() > 80 {
         return Err(ApiError::bad("token name must contain 1 to 80 characters"));
     }
-    let allowed = API_TOKEN_PERMISSIONS.into_iter().collect::<HashSet<_>>();
+    if input.name == OPERATOR_CHECK_TOKEN {
+        return Err(ApiError::bad(
+            "that name is reserved for Poundlock's own checks",
+        ));
+    }
     input.permissions.sort();
     input.permissions.dedup();
-    if input.permissions.is_empty()
-        || input
-            .permissions
-            .iter()
-            .any(|permission| !allowed.contains(permission.as_str()))
-    {
-        return Err(ApiError::bad(format!(
-            "permissions must contain only: {}",
-            API_TOKEN_PERMISSIONS.join(", ")
-        )));
+    if input.permissions.is_empty() {
+        return Err(ApiError::bad("choose at least one permission"));
     }
-    Ok(Json(state.store.create_api_token(&input)?))
+    let allowed = API_TOKEN_PERMISSIONS
+        .map(|(code, _)| code)
+        .into_iter()
+        .collect::<HashSet<_>>();
+    if let Some(unknown) = input
+        .permissions
+        .iter()
+        .find(|permission| !allowed.contains(permission.as_str()))
+    {
+        return Err(ApiError::bad(format!("unknown permission {unknown}")));
+    }
+    Ok(input)
 }
 
 async fn revoke_token(
@@ -212,3 +237,7 @@ async fn preflight(
         .unwrap_or(Value::Null);
     Ok(Json(access))
 }
+
+#[cfg(test)]
+#[path = "tokens_tests.rs"]
+mod tests;

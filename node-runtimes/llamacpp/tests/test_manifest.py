@@ -52,9 +52,10 @@ class ProfileTests(ManifestCase):
         for key in ("warm_seconds", "lease_timeout_seconds", "startup_timeout_seconds"):
             del raw[key]
         profile = load_manifest(self.write(manifest_dict({ALIAS: raw}))).profile(ALIAS)
-        self.assertEqual((600, 300, 420), (
-            profile.warm_seconds, profile.lease_timeout_seconds, profile.startup_timeout_seconds
-        ))
+        self.assertEqual(
+            (600, 300, 420),
+            (profile.warm_seconds, profile.lease_timeout_seconds, profile.startup_timeout_seconds),
+        )
         self.assertIsNone(profile.warmup)
         self.assertEqual((), profile.conflicts)
         self.assertEqual("http://127.0.0.1:8080", profile.endpoint)
@@ -62,17 +63,13 @@ class ProfileTests(ManifestCase):
     def test_the_manager_owns_model_alias_context_host_and_port(self) -> None:
         profile = self.profile()
         command = profile.command
-        self.assertEqual(
-            ["--model", "--alias", "--ctx-size", "--host", "--port"], command[1:11:2]
-        )
+        self.assertEqual(["--model", "--alias", "--ctx-size", "--host", "--port"], command[1:11:2])
         self.assertEqual(["--parallel", "1", "--jinja"], command[11:])
 
     def test_repeating_a_managed_option_is_rejected(self) -> None:
         for argument in ("--port", "-m", "--model", "--alias", "-a", "--ctx-size", "-c", "--host"):
             with self.subTest(argument):
-                self.assert_invalid(
-                    "repeats", server=self.server(arguments=[argument, "x"])
-                )
+                self.assert_invalid("repeats", server=self.server(arguments=[argument, "x"]))
         self.assert_invalid("repeats --port", server=self.server(arguments=["--port=9"]))
 
     def test_the_key_file_and_the_slots_switch_shape_the_command(self) -> None:
@@ -158,13 +155,29 @@ class ProfileTests(ManifestCase):
         self.assert_invalid("invalid name", server=self.server(environment={"BAD NAME": "1"}))
         self.assert_invalid("non-empty string", server=self.server(environment={"OK": 1}))
 
+    def test_gpu_order_replaces_a_written_device_order(self) -> None:
+        self.assertEqual(
+            "largest_first", self.profile(server=self.server(gpu_order="largest_first")).gpu_order
+        )
+        self.assertIsNone(self.profile().gpu_order)
+        self.assert_invalid("must be one of", server=self.server(gpu_order="fastest"))
+        self.assert_invalid(
+            "remove it from server.arguments",
+            server=self.server(gpu_order="largest_first", arguments=["--device", "MTL0,MTL1"]),
+        )
+        self.assert_invalid(
+            "remove GGML_METAL_DEVICE_LIST",
+            server=self.server(gpu_order="largest_first", environment={"GGML_METAL_DEVICE_LIST": "1,0"}),
+        )
+
     def test_warmup_settings(self) -> None:
         request = {"reasoning_effort": "none"}
         profile = self.profile(warmup={"min_tokens_per_second": 25.5, "request": request})
         self.assertEqual(25.5, profile.warmup.min_tokens_per_second)
-        self.assertEqual((16, 256, 300), (
-            profile.warmup.prime_tokens, profile.warmup.max_tokens, profile.warmup.timeout_seconds
-        ))
+        self.assertEqual(
+            (16, 256, 300),
+            (profile.warmup.prime_tokens, profile.warmup.max_tokens, profile.warmup.timeout_seconds),
+        )
         self.assert_invalid("positive number", warmup={"min_tokens_per_second": 0})
         self.assert_invalid("may not override", warmup={"request": {"messages": []}})
         self.assert_invalid("unknown keys", warmup={"min_tps": 3})
@@ -235,7 +248,7 @@ class ManifestFileTests(ManifestCase):
         options = load_manifest(self.write(manifest_dict())).runtime
         self.assertIsNone(options.sweeper)
         self.assertEqual(30, options.sweep_interval_seconds)
-        self.assertFalse(options.caffeinate)
+        self.assertFalse(options.keep_awake)
         self.assertEqual("http://127.0.0.1:11434", options.ollama_url)
         with self.assertRaisesRegex(InfrastructureError, "sweeper"):
             load_manifest(self.write(manifest_dict(sweeper="cron")))
@@ -287,9 +300,7 @@ arguments = ["--jinja"]
 class ExampleTests(unittest.TestCase):
     def test_examples_are_valid_manifests(self) -> None:
         examples = sorted(EXAMPLES.glob("*.json"))
-        self.assertEqual(
-            ["linux-amd-vulkan-mtp.json", "macos-metal.json"], [path.name for path in examples]
-        )
+        self.assertEqual(["linux-amd-vulkan-mtp.json", "macos-metal.json"], [path.name for path in examples])
         for path in examples:
             with self.subTest(path.name):
                 manifest = load_manifest(path)
@@ -315,9 +326,9 @@ class ExampleTests(unittest.TestCase):
                     self.assertIsNotNone(profile.api_key_file)
                     self.assertIn("--no-slots", profile.command)
 
-    def test_the_macos_example_uses_caffeinate_and_the_launchd_sweep(self) -> None:
+    def test_the_macos_example_keeps_awake_and_uses_the_launchd_sweep(self) -> None:
         manifest = load_manifest(EXAMPLES / "macos-metal.json")
-        self.assertTrue(manifest.runtime.caffeinate)
+        self.assertTrue(manifest.runtime.keep_awake)
         self.assertEqual("external", manifest.runtime.sweeper)
 
     def test_examples_and_package_have_no_personal_paths(self) -> None:

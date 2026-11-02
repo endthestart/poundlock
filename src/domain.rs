@@ -105,14 +105,22 @@ pub fn default_max_output_tokens(context_tokens: u64) -> u64 {
     (context_tokens / 4).clamp(1, 32_768)
 }
 
-pub const API_TOKEN_PERMISSIONS: [&str; 7] = [
-    "models:read",
-    "inference:invoke",
-    "inference:priority",
-    "external:invoke",
-    "jobs:read",
-    "jobs:submit",
-    "jobs:cancel",
+/// Each permission an API token can hold, with the one label every client
+/// shows for it (published in capabilities and the operator overview).
+pub const API_TOKEN_PERMISSIONS: [(&str, &str); 7] = [
+    ("models:read", "List available models"),
+    ("inference:invoke", "Send inference requests"),
+    (
+        "inference:priority",
+        "Go ahead of other work when a model is busy",
+    ),
+    (
+        "external:invoke",
+        "Send prompts and files to external services",
+    ),
+    ("jobs:read", "Read its own jobs and results"),
+    ("jobs:submit", "Submit jobs with supplied files"),
+    ("jobs:cancel", "Cancel its own jobs"),
 ];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -123,6 +131,9 @@ pub struct ApiToken {
     pub created_at: String,
     pub last_used_at: Option<String>,
     pub revoked_at: Option<String>,
+    /// Poundlock's own principal for its checks: nobody holds its secret.
+    #[serde(default)]
+    pub internal: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -563,6 +574,11 @@ pub struct CreateModelProfile {
     /// is accepted. A server nobody declared yet takes the first model's.
     #[serde(default = "unknown_destination")]
     pub data_destination: String,
+    /// On a model server nobody declared yet, declare `data_destination` for
+    /// the server in the same change, though it has other models: every model
+    /// on it then inherits it. Nothing changes when the model is refused.
+    #[serde(default)]
+    pub declare_server: bool,
     /// `model_default` or `off`. See `MODEL_PROFILE_THINKING_VALUES`.
     #[serde(default = "model_default_thinking")]
     pub thinking: String,
@@ -598,6 +614,9 @@ pub struct PatchModelProfile {
     #[serde(default, deserialize_with = "optional_nullable")]
     pub idle_seconds: Option<Option<u64>>,
     pub data_destination: Option<String>,
+    /// See `CreateModelProfile::declare_server`.
+    #[serde(default)]
+    pub declare_server: bool,
     /// Omit to leave unchanged. `model_default` or `off`.
     pub thinking: Option<String>,
     /// Omit to leave unchanged, null to clear. llama.cpp profiles only.
@@ -631,13 +650,6 @@ pub struct HarnessProfile {
     pub kind: String,
     pub version: String,
     pub created_at: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-pub struct CreateHarnessProfile {
-    pub name: String,
-    pub kind: String,
-    pub version: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -681,6 +693,29 @@ pub struct Job {
     pub cancel_requested: bool,
     pub result: Option<Value>,
     pub error: Option<Value>,
+    /// The result's verification status (passed, failed, …).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub verification: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+/// A job as lists show it: what it asks and where it stands. Its policy, result and
+/// error are read only with the job itself, since a list sorts over every row (30 Oct).
+#[derive(Debug, Clone, Serialize)]
+pub struct JobSummary {
+    pub id: String,
+    pub idempotency_key: String,
+    pub project_id: Option<String>,
+    pub model_profile_id: String,
+    pub harness_profile_id: String,
+    pub prompt: String,
+    pub status: String,
+    pub attempt_id: String,
+    pub cancel_requested: bool,
+    /// The result's verification status (passed, failed, …).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub verification: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }

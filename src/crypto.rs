@@ -57,18 +57,12 @@ impl SecretBox {
     }
 
     /// Opens a value sealed for this binding. Unbound values from before 0.2.0
-    /// are refused here; the store re-seals them once when it opens.
+    /// are refused.
     pub fn open(&self, binding: &Binding, encoded: &str) -> Result<String> {
         let Some(encoded) = encoded.strip_prefix(BOUND) else {
             bail!("secret is not bound to its row");
         };
         self.decrypt(encoded, binding.associated_data().as_bytes())
-    }
-
-    /// Opens a value sealed before secrets were bound to their rows. Only the
-    /// store's one-time re-sealing calls this.
-    pub(crate) fn open_unbound(&self, encoded: &str) -> Result<String> {
-        self.decrypt(encoded, b"")
     }
 
     fn decrypt(&self, encoded: &str, aad: &[u8]) -> Result<String> {
@@ -137,7 +131,7 @@ pub fn sha256_hex_file(path: &Path) -> Result<String> {
     Ok(to_hex(&hasher.finalize()))
 }
 
-fn to_hex(digest: &[u8]) -> String {
+pub(crate) fn to_hex(digest: &[u8]) -> String {
     const HEX: &[u8] = b"0123456789abcdef";
     let mut out = String::with_capacity(digest.len() * 2);
     for byte in digest {
@@ -184,7 +178,7 @@ pub fn make_group_readable(path: &Path) -> Result<()> {
 
 #[cfg(test)]
 impl SecretBox {
-    /// A value in the format written before 0.2.0, for migration tests.
+    /// A value in the format written before 0.2.0, which never opens.
     pub(crate) fn encrypt_unbound_for_test(&self, plaintext: &str) -> String {
         let nonce = random::<[u8; 12]>();
         let mut value = nonce.to_vec();
@@ -222,12 +216,11 @@ mod secret_box_tests {
     }
 
     #[test]
-    fn an_unbound_value_opens_only_through_the_re_sealing_path() {
+    fn an_unbound_value_never_opens() {
         let secrets = secrets();
         let unbound = secrets.encrypt_unbound_for_test("legacy");
         assert!(!unbound.starts_with(BOUND));
         let here = Binding::new("endpoints", "api_key_ciphertext", "a");
         assert!(secrets.open(&here, &unbound).is_err());
-        assert_eq!(secrets.open_unbound(&unbound).unwrap(), "legacy");
     }
 }

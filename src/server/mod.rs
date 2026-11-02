@@ -11,6 +11,7 @@ mod nodes;
 mod reasoning;
 mod redact;
 mod relay;
+mod route_add;
 mod runner_api;
 pub(crate) mod runtime;
 mod tokens;
@@ -46,7 +47,7 @@ pub struct AppState {
 
 pub async fn run(config: AppConfig) -> anyhow::Result<()> {
     let store = Store::open(&config.database_path(), config.secrets.clone())?;
-    let inference = InferenceClient::new(config.external_timeout_seconds)?;
+    let inference = InferenceClient::new()?;
     let occupancy = capacity::Occupancy::new();
     occupancy.recover(&store)?;
     let managed_identities = ManagedIdentityManager::new(store.clone())?;
@@ -88,14 +89,18 @@ pub fn router(state: AppState) -> Router {
         .route("/", get(index))
         .route("/app.js", get(app_js))
         .route(
+            "/access.js",
+            get(|| async { js(include_str!("../../web/access.js")) }),
+        )
+        .route(
             "/jobs.js",
             get(|| async { js(include_str!("../../web/jobs.js")) }),
         )
         .route("/connections.js", get(connections_js))
         .route("/models.js", get(models_js))
         .route(
-            "/gateway-handoff.js",
-            get(|| async { js(include_str!("../../web/gateway-handoff.js")) }),
+            "/route-add.js",
+            get(|| async { js(include_str!("../../web/route-add.js")) }),
         )
         .route("/machines.js", get(machines_js))
         .route(
@@ -112,6 +117,7 @@ pub fn router(state: AppState) -> Router {
         .route("/readyz", get(ready))
         .merge(admin::routes())
         .merge(discovery::routes())
+        .merge(route_add::routes())
         .merge(model_draft::routes())
         .merge(jobs::routes(state.clone()))
         .merge(nodes::routes())
@@ -192,7 +198,7 @@ async fn openapi() -> ([(&'static str, &'static str); 1], &'static str) {
     )
 }
 async fn health() -> impl IntoResponse {
-    axum::Json(json!({"status":"ok","version":env!("CARGO_PKG_VERSION")}))
+    axum::Json(json!({"status":"ok","version":crate::VERSION}))
 }
 /// Controller/storage readiness only: the process is serving and its SQLite
 /// store answers. It deliberately does not gate on runners, nodes, model
@@ -207,7 +213,7 @@ async fn ready(State(state): State<AppState>) -> ApiResult<axum::Json<serde_json
         "status":"ready",
         "scope":"controller_storage",
         "checks":{"storage":"ok"},
-        "version":env!("CARGO_PKG_VERSION")
+        "version":crate::VERSION
     })))
 }
 
@@ -241,13 +247,26 @@ pub fn api_token_auth(
     permission: &str,
 ) -> ApiResult<crate::domain::ApiTokenPrincipal> {
     let token = bearer(headers).unwrap_or_default();
-    if let Some(principal) = state.store.authenticate_api_token(token, permission)? {
-        Ok(principal)
-    } else {
-        Err(ApiError::unauthorized(format!(
-            "valid API token with {permission} permission required"
-        )))
-    }
+    state
+        .store
+        .authenticate_api_token(token, Some(permission))?
+        .ok_or_else(|| {
+            ApiError::unauthorized(format!(
+                "valid API token with {permission} permission required"
+            ))
+        })
+}
+
+/// Any active application token, whatever it may do.
+pub fn any_api_token_auth(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> ApiResult<crate::domain::ApiTokenPrincipal> {
+    let token = bearer(headers).unwrap_or_default();
+    state
+        .store
+        .authenticate_api_token(token, None)?
+        .ok_or_else(|| ApiError::unauthorized("valid API token required"))
 }
 
 pub fn runner_auth(state: &AppState, headers: &HeaderMap) -> ApiResult<()> {
@@ -309,6 +328,15 @@ impl ApiError {
     pub fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
+            message: message.into(),
+            code: None,
+        }
+    }
+    /// A JSON body of the right shape whose fields do not fit, as axum's own
+    /// extractor answers.
+    pub fn unprocessable(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNPROCESSABLE_ENTITY,
             message: message.into(),
             code: None,
         }
@@ -441,7 +469,7 @@ mod tests;
 
 #[cfg(test)]
 #[path = "ops_tests.rs"]
-mod ops_tests;
+pub(crate) mod ops_tests;
 
 #[cfg(test)]
 #[path = "warm_path_tests.rs"]

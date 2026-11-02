@@ -165,6 +165,7 @@ fn durable_job_renew_still_uses_the_job_attempt_lease() {
             runtime_profile: Some("large-runtime".into()),
             idle_seconds: None,
             data_destination: "unknown".into(),
+            declare_server: false,
 
             thinking: "model_default".into(),
             thinking_budget_tokens: None,

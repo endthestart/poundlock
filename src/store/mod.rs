@@ -12,6 +12,7 @@ mod tokens;
 
 pub(crate) use nodes::LIVE_ENROLLMENT_CONFLICT;
 pub(crate) use signals::NodeSignal;
+pub(crate) use tokens::OPERATOR_CHECK_TOKEN;
 
 use crate::crypto::{Binding, SecretBox};
 use anyhow::{Context, Result};
@@ -69,7 +70,6 @@ impl Store {
             relaxed_sync_allowed: journal_mode.eq_ignore_ascii_case("wal"),
         };
         store.migrate()?;
-        store.bind_secrets(path)?;
         store.seed_defaults()?;
         Ok(store)
     }
@@ -102,37 +102,16 @@ impl Store {
             .context("check SQLite readiness")
     }
 
+    /// Adds the columns and tables `schema.sql` does not create. A new database
+    /// gets them here, and every database a 0.2.x controller opened already has
+    /// them. The upgrades from 0.1.x schemas are gone: start 0.2.x on such a
+    /// database first.
     fn migrate(&self) -> Result<()> {
         let connection = self.connection()?;
         for (table, column, decl) in [
             ("endpoints", "removed_at", "TEXT"),
             ("model_profiles", "removed_at", "TEXT"),
             ("projects", "removed_at", "TEXT"),
-            ("endpoints", "last_checked_at", "TEXT"),
-            ("endpoints", "last_check_ok", "INTEGER"),
-            ("endpoints", "last_check_message", "TEXT"),
-            (
-                "endpoints",
-                "managed_identity_json",
-                "TEXT NOT NULL DEFAULT '{}'",
-            ),
-            ("endpoints", "revision_nonce", "TEXT NOT NULL DEFAULT ''"),
-            ("model_profiles", "last_checked_at", "TEXT"),
-            ("model_profiles", "last_check_ok", "INTEGER"),
-            ("model_profiles", "last_check_message", "TEXT"),
-            ("model_profiles", "aliases_json", "TEXT"),
-            ("model_profiles", "idle_seconds", "INTEGER"),
-            ("model_profiles", "model_label", "TEXT"),
-            (
-                "model_profiles",
-                "revision_nonce",
-                "TEXT NOT NULL DEFAULT ''",
-            ),
-            (
-                "model_profiles",
-                "data_destination",
-                "TEXT NOT NULL DEFAULT 'unknown'",
-            ),
             (
                 "model_profiles",
                 "thinking",
@@ -154,52 +133,12 @@ impl Store {
                 "TEXT NOT NULL DEFAULT '{}'",
             ),
             ("model_profiles", "thinking_budget_tokens", "INTEGER"),
-            ("projects", "instruction_files_json", "TEXT"),
             ("endpoints", "public_url", "TEXT"),
             ("jobs", "contract_ciphertext", "TEXT"),
             ("jobs", "source_ciphertext", "TEXT"),
             ("nodes", "credential_issued_at", "TEXT"),
         ] {
             add_column_if_missing(&connection, table, column, decl)?;
-        }
-        if !column_exists(&connection, "endpoints", "data_destination")? {
-            // One transaction: the declaration moves to the server and its
-            // models start inheriting it together, or not at all.
-            let transaction = connection.unchecked_transaction()?;
-            transaction
-                .execute_batch(include_str!("../../migrations/endpoint-destination.sql"))
-                .context("apply endpoint destination migration")?;
-            transaction.commit()?;
-        }
-        if !column_exists(&connection, "model_profiles", "uses_json")? {
-            connection
-                .execute_batch(include_str!("../../migrations/model-profile-uses.sql"))
-                .context("apply model profile uses migration")?;
-        }
-        let project_required: bool = connection.query_row(
-            "SELECT \"notnull\" FROM pragma_table_info('jobs') WHERE name='project_id'",
-            [],
-            |row| row.get(0),
-        )?;
-        if project_required {
-            connection.pragma_update(None, "foreign_keys", false)?;
-            let migrated = (|| -> Result<()> {
-                let transaction = connection.unchecked_transaction()?;
-                transaction.execute_batch(include_str!("../../migrations/job-source.sql"))?;
-                let violations: i64 = transaction.query_row(
-                    "SELECT count(*) FROM pragma_foreign_key_check",
-                    [],
-                    |row| row.get(0),
-                )?;
-                anyhow::ensure!(
-                    violations == 0,
-                    "job source migration violates foreign keys"
-                );
-                transaction.commit()?;
-                Ok(())
-            })();
-            connection.pragma_update(None, "foreign_keys", true)?;
-            migrated?;
         }
         add_column_if_missing(&connection, "jobs", "inference_token_hash", "TEXT")?;
         add_column_if_missing(
@@ -208,24 +147,15 @@ impl Store {
             "policy_json",
             "TEXT NOT NULL DEFAULT '{}'",
         )?;
-        // Add columns introduced after the historical jobs-table rebuild only
-        // once that rebuild is complete, or the copied schema will drop them.
-        add_column_if_missing(&connection, "jobs", "api_token_id", "TEXT")?;
         // Counts a token's unfinished jobs at submission without reading rows.
         connection.execute_batch(
             "CREATE INDEX IF NOT EXISTS jobs_token_status ON jobs(api_token_id, status)",
         )?;
-        // A job's source, including any Git read token, is needed only until
-        // the job ends, and every ending now removes it. This removes it from
-        // jobs that ended before that; afterwards it changes nothing.
-        connection.execute(
-            concat!(
-                "UPDATE jobs SET source_ciphertext=NULL
-             WHERE status IN ",
-                crate::terminal_job_statuses!(),
-                " AND source_ciphertext IS NOT NULL"
-            ),
-            [],
+        // Job lists sort by created_at: without these, every list read every row's
+        // result to sort it, about 2 s on the Hub (30 Oct).
+        connection.execute_batch(
+            "CREATE INDEX IF NOT EXISTS jobs_created ON jobs(created_at);
+             CREATE INDEX IF NOT EXISTS jobs_token_created ON jobs(api_token_id, created_at);",
         )?;
         // The wall budget a runner reported when it claimed the job, and the
         // deadline derived from that claim.
@@ -245,115 +175,8 @@ impl Store {
                signature TEXT NOT NULL,
                uploaded_at TEXT NOT NULL,
                PRIMARY KEY (os, arch, sha256)
-             );
-             CREATE TABLE IF NOT EXISTS managed_litellm_keys (
-               api_token_id TEXT NOT NULL REFERENCES api_tokens(id),
-               endpoint_id TEXT NOT NULL REFERENCES endpoints(id),
-               virtual_key_ciphertext TEXT NOT NULL,
-               virtual_key_hash TEXT NOT NULL,
-               remote_key_id TEXT,
-               policy_hash TEXT NOT NULL,
-               status TEXT NOT NULL,
-               last_error TEXT,
-               created_at TEXT NOT NULL,
-               updated_at TEXT NOT NULL,
-               PRIMARY KEY (api_token_id, endpoint_id)
-             );
-             CREATE INDEX IF NOT EXISTS managed_litellm_keys_status
-             ON managed_litellm_keys(status, updated_at);",
+             );",
         )?;
-        Ok(())
-    }
-
-    /// Re-seals every value written before secrets were bound to their rows
-    /// (L7), in one transaction. Afterwards an unbound value never opens. An
-    /// empty value is a cleared secret, such as a removed endpoint's key.
-    fn bind_secrets(&self, path: &Path) -> Result<()> {
-        let mut connection = self.connection()?;
-        connection.execute_batch(
-            "CREATE TABLE IF NOT EXISTS store_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)",
-        )?;
-        let bound_before: bool = connection.query_row(
-            "SELECT EXISTS(SELECT 1 FROM store_meta WHERE key='secrets_bound')",
-            [],
-            |row| row.get(0),
-        )?;
-        let unbound: i64 = SEALED_COLUMNS
-            .iter()
-            .map(|(table, column, ..)| {
-                connection.query_row(
-                    &format!(
-                        "SELECT COUNT(*) FROM {table}
-                         WHERE {column} IS NOT NULL AND {column}!='' AND {column} NOT LIKE 'v2.%'"
-                    ),
-                    [],
-                    |row| row.get::<_, i64>(0),
-                )
-            })
-            .sum::<rusqlite::Result<i64>>()?;
-        // Re-sealing is a one-time migration. Afterwards an unbound value can only
-        // have been written in by hand, and re-sealing it would bind it to
-        // whichever row it was pasted into (review of L7).
-        if bound_before {
-            anyhow::ensure!(
-                unbound == 0,
-                "the database holds {unbound} secret(s) sealed without their row, which only an edit of the database can put there; restore a backup or remove them"
-            );
-            return Ok(());
-        }
-        if unbound == 0 {
-            connection.execute(
-                "INSERT OR IGNORE INTO store_meta (key,value) VALUES ('secrets_bound',?1)",
-                [now()],
-            )?;
-            return Ok(());
-        }
-        // A 0.1.x controller cannot read re-sealed secrets, so keep a copy of
-        // the database as it was, for a rollback. The first copy is kept.
-        let snapshot = path.with_extension("sqlite3.pre-secret-binding");
-        if !snapshot.exists() {
-            connection
-                .execute("VACUUM INTO ?1", [snapshot.to_string_lossy()])
-                .context("snapshot the database before re-sealing secrets")?;
-            // It holds the same secrets as the database, cleared ones included.
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                std::fs::set_permissions(&snapshot, std::fs::Permissions::from_mode(0o600))?;
-            }
-            tracing::info!(snapshot = %snapshot.display(), "saved the database before re-sealing secrets");
-        }
-        let transaction = connection.transaction()?;
-        let mut resealed = 0;
-        for (table, column, key, bind) in SEALED_COLUMNS {
-            let rows: Vec<(String, String)> = transaction
-                .prepare(&format!(
-                    "SELECT {key},{column} FROM {table}
-                     WHERE {column} IS NOT NULL AND {column}!='' AND {column} NOT LIKE 'v2.%'"
-                ))?
-                .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
-                .collect::<rusqlite::Result<_>>()?;
-            for (row, value) in rows {
-                let plaintext = self
-                    .secrets
-                    .open_unbound(&value)
-                    .with_context(|| format!("re-seal {table}.{column}"))?;
-                let sealed = self.secrets.seal(&bind(&row), &plaintext)?;
-                transaction.execute(
-                    &format!("UPDATE {table} SET {column}=?1 WHERE {key}=?2"),
-                    rusqlite::params![sealed, row],
-                )?;
-                resealed += 1;
-            }
-        }
-        transaction.execute(
-            "INSERT OR IGNORE INTO store_meta (key,value) VALUES ('secrets_bound',?1)",
-            [now()],
-        )?;
-        transaction.commit()?;
-        if resealed > 0 {
-            tracing::info!(resealed, "bound stored secrets to their rows");
-        }
         Ok(())
     }
 
@@ -367,22 +190,6 @@ impl Store {
         Ok(())
     }
 }
-
-type Bind = fn(&str) -> Binding<'_>;
-
-/// Every sealed column: its table, column, the SQL expression naming its row,
-/// and the binding its values are sealed with.
-const SEALED_COLUMNS: [(&str, &str, &str, Bind); 4] = [
-    ("endpoints", "api_key_ciphertext", "id", endpoint_key),
-    ("jobs", "contract_ciphertext", "id", job_contract),
-    ("jobs", "source_ciphertext", "id", job_source),
-    (
-        "managed_litellm_keys",
-        "virtual_key_ciphertext",
-        "api_token_id || '/' || endpoint_id",
-        managed_key,
-    ),
-];
 
 pub(crate) fn endpoint_key(id: &str) -> Binding<'_> {
     Binding::new("endpoints", "api_key_ciphertext", id)

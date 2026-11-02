@@ -419,3 +419,60 @@ async fn durable_jobs_on_llamacpp_get_the_same_reasoning_rules_as_the_relay() {
     );
     assert_eq!(seen[2]["thinking_budget_tokens"], 100);
 }
+
+/// Job inference checks a reasoning choice the way the relay does: `xhigh` is
+/// in the vocabulary, and a profile with verified levels accepts only those.
+/// Destination overrides are refused rather than stripped.
+#[test]
+fn job_requests_get_the_relays_reasoning_checks() {
+    let (_directory, state) = state_with_artifacts(None);
+    let endpoint = state
+        .store
+        .create_endpoint(
+            &serde_json::from_value(json!({"name":"private","kind":"openai",
+                "base_url":"http://127.0.0.1:9/v1","api_key":""}))
+            .unwrap(),
+        )
+        .unwrap();
+    let model = state
+        .store
+        .create_model_profile(
+            &serde_json::from_value(json!({"name":"accepted","endpoint_id":endpoint.id,
+                "model_id":"accepted-model","context_tokens":8192,"max_output_tokens":1024,
+                "workload_class":"durable-coding-agent","wake_policy":"never"}))
+            .unwrap(),
+        )
+        .unwrap();
+    let job = state
+        .store
+        .submit_job(
+            &serde_json::from_value(json!({"source":{"kind":"empty"},"idempotency_key":"checks",
+                "model_profile_id":model.id,"harness_profile_id":"pi","prompt":"test"}))
+            .unwrap(),
+        )
+        .unwrap();
+    let mut package = state.store.runner_package(&job.id).unwrap().unwrap();
+    let request = |extra: Value| {
+        let mut body = json!({"model":"accepted-model","messages":[]});
+        for (key, value) in extra.as_object().unwrap() {
+            body[key] = value.clone();
+        }
+        body
+    };
+
+    let mut xhigh = request(json!({"reasoning_effort":"xhigh"}));
+    validate_request(&mut xhigh, &package).unwrap();
+    assert_eq!(xhigh["max_tokens"], 1024);
+
+    package.model.catalog.reasoning_levels = vec!["none".into(), "high".into()];
+    validate_request(&mut request(json!({"reasoning_effort":"high"})), &package).unwrap();
+    let error =
+        validate_request(&mut request(json!({"reasoning_effort":"xhigh"})), &package).unwrap_err();
+    assert_eq!(error.code(), Some("unsupported_reasoning_effort"));
+    let error = validate_request(
+        &mut request(json!({"api_base":"http://elsewhere"})),
+        &package,
+    )
+    .unwrap_err();
+    assert!(error.to_string().contains("api_base"), "{error}");
+}

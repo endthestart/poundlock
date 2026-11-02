@@ -1,8 +1,5 @@
 use super::*;
-use crate::client::InferenceClient;
-use crate::config::AppConfig;
 use crate::domain::{CreateEndpoint, CreateModelProfile, EnrollNode, ModelProfile};
-use crate::server::capacity::Occupancy;
 use crate::store::Store;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -19,41 +16,10 @@ impl Fixture {
     }
 
     fn with_offline_threshold(external_timeout_seconds: u64, node_offline_seconds: i64) -> Self {
-        let directory = tempfile::tempdir().unwrap();
-        let secrets =
-            crate::crypto::SecretBox::load_or_create(&directory.path().join("master-key")).unwrap();
-        let store =
-            Store::open(&directory.path().join("poundlock.sqlite3"), secrets.clone()).unwrap();
-        let config = AppConfig {
-            allow_job_network: false,
-            wake_socket: None,
-            git_hosts: vec!["github.com".into()],
-            bind: "127.0.0.1:0".parse().unwrap(),
-            data_dir: directory.path().join("data"),
-            runtime_dir: directory.path().join("runtime"),
-            projects_dir: directory.path().join("projects"),
-            work_dir: directory.path().join("work"),
-            admin_token: "admin".into(),
-            runner_token: "runner".into(),
-            secrets,
-            external_timeout_seconds,
-            job_inference_timeout_seconds: 30,
-            node_offline_seconds,
-            client_artifacts_dir: None,
-            max_active_jobs_per_token: 10,
-            max_requests_in_flight: 512,
-            capacity_default_wait_seconds: 0,
-            openrouter_catalog: crate::config::CatalogMode::OnRequest,
-            backup: None,
-        };
-        let state = AppState {
-            config: Arc::new(config),
-            managed_identities: crate::litellm::ManagedIdentityManager::new(store.clone()).unwrap(),
-            store,
-            inference: InferenceClient::new(external_timeout_seconds).unwrap(),
-            occupancy: Occupancy::new(),
-            runners: Default::default(),
-        };
+        let (directory, state) = crate::server::ops_tests::test_state(|config| {
+            config.external_timeout_seconds = external_timeout_seconds;
+            config.node_offline_seconds = node_offline_seconds;
+        });
         Self {
             _directory: directory,
             state,
@@ -102,6 +68,7 @@ impl Fixture {
                 runtime_profile: attach_node.then(|| "coding".into()),
                 idle_seconds: None,
                 data_destination: "unknown".into(),
+                declare_server: false,
                 thinking: "model_default".into(),
                 thinking_budget_tokens: None,
                 capabilities: Vec::new(),

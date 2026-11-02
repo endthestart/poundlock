@@ -229,8 +229,12 @@ impl Store {
             .endpoint_secret(&input.endpoint_id)?
             .ok_or(ConfigurationError("endpoint_id does not exist"))?
             .endpoint;
-        let (data_destination, inherited, declaration) =
-            self.model_destination(&endpoint, Some(&input.data_destination), None)?;
+        let (data_destination, inherited, declaration) = self.model_destination(
+            &endpoint,
+            Some(&input.data_destination),
+            None,
+            input.declare_server,
+        )?;
         let created_at = now();
         let capabilities = stamp_recorded_at(&input.capabilities, &created_at);
         let profile = ModelProfile {
@@ -315,6 +319,7 @@ impl Store {
         endpoint: &Endpoint,
         requested: Option<&str>,
         profile_id: Option<&str>,
+        declare_server: bool,
     ) -> Result<(String, bool, Option<String>)> {
         if requested.is_some_and(|value| !DATA_DESTINATIONS.contains(&value)) {
             return Err(ConfigurationError(DESTINATION_VALUES_MESSAGE).into());
@@ -326,10 +331,10 @@ impl Store {
             None | Some("unknown") => Ok((declared.to_owned(), true, None)),
             Some(value) if value == declared => Ok((declared.to_owned(), true, None)),
             Some(value) if declared == "unknown" => {
-                if self.server_has_other_models(&endpoint.id, profile_id)? {
+                if !declare_server && self.server_has_other_models(&endpoint.id, profile_id)? {
                     Err(ConfigurationError(
                         "where this server sends prompts is not declared yet; declare it once on \
-                         the server, and every model on it inherits it",
+                         the server (or with declare_server), and every model on it inherits it",
                     )
                     .into())
                 } else {
@@ -516,7 +521,7 @@ impl Store {
             if previous_source == "endpoint" || route_changed || (requested.is_some() && !restating)
             {
                 let (destination, _, declare) =
-                    self.model_destination(&endpoint, requested, Some(id))?;
+                    self.model_destination(&endpoint, requested, Some(id), input.declare_server)?;
                 if requested.is_none()
                     && previous_destination != "unknown"
                     && destination != previous_destination
@@ -789,10 +794,6 @@ impl Store {
         Ok(Some(project))
     }
 
-    pub fn update_endpoint(&self, id: &str, input: &CreateEndpoint) -> Result<Option<Endpoint>> {
-        self.update_endpoint_with_destination(id, input, None)
-    }
-
     /// Re-save an endpoint and, for a model server, optionally declare where
     /// it sends prompts in the same transaction.
     pub fn update_endpoint_with_destination(
@@ -874,9 +875,10 @@ impl Store {
         )? > 0)
     }
 
-    pub fn remove_endpoint(&self, id: &str) -> Result<bool> {
-        let connection = self.connection()?;
-        let used: bool = connection.query_row(
+    /// Refuses while a model profile still uses the endpoint. Removal asks this
+    /// before anything irreversible, such as revoking the gateway's client keys.
+    pub fn ensure_endpoint_unused(&self, id: &str) -> Result<()> {
+        let used: bool = self.connection()?.query_row(
             "SELECT EXISTS(SELECT 1 FROM model_profiles WHERE endpoint_id=?1 AND removed_at IS NULL)",
             [id], |row| row.get(0))?;
         if used {
@@ -884,6 +886,12 @@ impl Store {
                 ConfigurationError("Remove or move this endpoint's model profiles first").into(),
             );
         }
+        Ok(())
+    }
+
+    pub fn remove_endpoint(&self, id: &str) -> Result<bool> {
+        self.ensure_endpoint_unused(id)?;
+        let connection = self.connection()?;
         let active_mappings: bool = connection.query_row(
             "SELECT EXISTS(SELECT 1 FROM managed_litellm_keys
              WHERE endpoint_id=?1 AND status NOT IN ('revoked','deleted'))",

@@ -135,7 +135,7 @@ async fn replace_with_key(
         }
         return Ok(false);
     }
-    let current = semver::Version::parse(env!("CARGO_PKG_VERSION"))?;
+    let current = semver::Version::parse(crate::VERSION)?;
     let Some(approved) = approve(&info, key.as_ref(), &current)? else {
         return Ok(false);
     };
