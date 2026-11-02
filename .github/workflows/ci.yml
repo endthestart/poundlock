@@ -51,6 +51,9 @@ jobs:
             -e CARGO_HOME=/cargo --workdir /work \
             --entrypoint sh rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e -c '
               set -eu
+              # The toolchain built into the image: rust-toolchain.toml would make rustup
+              # try to install 1.98 into this read-only container.
+              export RUSTUP_TOOLCHAIN="$RUST_VERSION"
               tar xf -
               curl -fsSL -o /tmp/cargo-deny.tgz https://github.com/EmbarkStudios/cargo-deny/releases/download/0.20.2/cargo-deny-0.20.2-x86_64-unknown-linux-musl.tar.gz
               echo "9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f  /tmp/cargo-deny.tgz" | sha256sum -c -
@@ -109,6 +112,8 @@ jobs:
           docker run --rm -v "$PWD:/source" -w /source rust:1.98-bookworm@sha256:93ce27a88655056a51dbdd8f5f2d7ddc071c7b0070fb288a37b5a285fc83971e bash -c '
             set -euo pipefail
             apt-get update && apt-get install -y --no-install-recommends python3
+            # The pinned image toolchain, not a fresh download for rust-toolchain.toml.
+            export RUSTUP_TOOLCHAIN="$RUST_VERSION"
             rustup component add rustfmt clippy
             bash scripts/build-binary.sh'
       - name: Build and test the macOS binary
