@@ -7,13 +7,13 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
  const linux={id:'linux',name:'Linux workstation',platform:'linux',status:'online',credential:'never-export-me',capabilities:{arch:'x86_64',runtimes:['always-ready'],inventory:{schema_version:1,collected_at:'2026-09-08T12:00:00Z',os:{name:'CachyOS',id:'cachyos',family:'arch',arch:'x86_64'},cpu:{model:'Fixture CPU',logical_cores:16},memory:{total_bytes:34359738368},storage:{available_bytes:100000000000},gpus:[{vendor:'AMD',name:'AMD Radeon RX 9070 XT',vram_bytes:17179869184}],software:[{name:'Ollama',status:'not_detected'}]},network:{mode:'system',interfaces:[{name:'enp1s0',mac:'02:11:22:33:44:55',addresses:['192.0.2.9'],broadcasts:['192.0.2.255'],connected:true,kind:'physical'},{name:'wlan0',mac:'02:11:22:33:44:66',addresses:['198.51.100.9'],broadcasts:['198.51.100.255'],connected:false,kind:'wireless'}]}}};
  const arm={id:'arm',name:'Apple workstation',platform:'macos',status:'offline',capabilities:{arch:'aarch64',runtimes:['always-ready']}};
  const intel={id:'intel',name:'Intel workstation',platform:'macos',status:'offline',capabilities:{arch:'x86_64',runtimes:['always-ready']}};
- const data={version:'0.1.0',nodes:[linux,arm,intel],endpoints:[{id:"fixture",name:"Existing server",kind:"openai",base_url:"http://fixture.invalid/v1"}],models:[],projects:[],harnesses:[],jobs:[],api_tokens:[],occupancy:[],git_hosts:[]};
+ const data={version:'0.1.0',nodes:[linux,arm,intel],endpoints:[{id:"fixture",name:"Existing server",kind:"openai",base_url:"http://fixture.invalid/v1"}],models:[],projects:[],harnesses:[],jobs:[],api_tokens:[],token_permissions:[],occupancy:[],git_hosts:[]};
  const writes=[],errors=[];let polls=0;
  const browser=await chromium.launch({headless:true});try{
   const page=await browser.newPage({viewport:{width:1440,height:1000},acceptDownloads:true});page.on('pageerror',e=>errors.push(e.message));page.on('dialog',d=>d.accept());
   await page.route('https://inventory-check.invalid/**',async route=>{
    const url=new URL(route.request().url());
-   if(url.pathname==='/api/v1/endpoints/fixture/test')return route.fulfill({json:{reachable:true,model_visible:true,model_ids:['example-model']}});
+   if(url.pathname==='/api/v1/endpoints/fixture/models')return route.fulfill({json:{model_ids:['example-model']}});
    if(url.pathname==='/api/v1/overview'){polls++;return route.fulfill({json:data})}
    if(url.pathname.endsWith('/wol')){writes.push({path:url.pathname,body:route.request().postDataJSON()});linux.wol_mac=writes.at(-1).body.mac;linux.wol_broadcast=writes.at(-1).body.broadcast;return route.fulfill({json:{configured:true}})}
    if(url.pathname.endsWith('/wake-test')){writes.push({path:url.pathname});return route.fulfill({json:{awake:true,was_online:false}})}
@@ -29,9 +29,15 @@ const fs=require('node:fs/promises'),path=require('node:path'),assert=require('n
   const detail=page.locator('[data-node-details="linux-inventory"]');await detail.locator(':scope > summary').click();assert.match(await detail.textContent(),/16.0 GiB/);assert.match(await detail.textContent(),/02:11:22:33:44:55/);
   const setup=page.locator('[data-node-details="linux-setup"]');await setup.locator(':scope > summary').click();await setup.getByText('Drivers and OS installation links',{exact:true}).click();assert.ok(await setup.getByRole('link',{name:'Arch ollama-rocm package'}).isVisible());assert.equal(await setup.getByRole('link',{name:'oMLX',exact:true}).count(),0);
   const start=polls;linux.status='offline';await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelector('[data-node-details="linux-inventory"]').open);assert.ok(polls>start);assert.match(await detail.textContent(),/RX 9070 XT/);assert.equal(await page.locator('#wol-mac').inputValue(),'02:11:22:33:44:66','Refresh preserves unsaved interface choice');
+  // An unchanged list is not rebuilt on a refresh, so an open dropdown stays open.
+  await page.evaluate(()=>{window.keptOption=document.querySelector('#wol-node').options[0]});const keptAt=polls;await page.locator('#refresh').click();await page.waitForTimeout(300);assert.ok(polls>keptAt);assert.equal(await page.evaluate(()=>document.querySelector('#wol-node').options[0]===window.keptOption),true);
   const downloadEvent=page.waitForEvent('download');await page.locator('[data-download-node="linux"]').click();const download=await downloadEvent;const report=JSON.parse(await fs.readFile(await download.path(),'utf8'));assert.equal(report.capabilities.inventory.gpus[0].vendor,'AMD');assert.equal(report.status,'offline');assert.ok(!JSON.stringify(report).includes('never-export-me'));
   for(const [id,expected,absent] of [['arm','oMLX','ToshLLM'],['intel','ToshLLM','oMLX']]){const help=page.locator(`[data-node-details="${id}-setup"]`);await help.locator(':scope > summary').click();assert.equal(await help.getByRole('link',{name:expected,exact:true}).count(),1);assert.equal(await help.getByRole('link',{name:absent,exact:true}).count(),0)}
   linux.capabilities.inventory.gpus[0].name='<img src=x onerror="window.inventoryXss=true">';await page.locator('#refresh').click();await page.waitForTimeout(100);assert.equal(await page.evaluate(()=>window.inventoryXss),undefined);assert.match(await detail.textContent(),/<img/);
+  // A machine without Ollama has no model-memory panel, and a server its runtime reports reads as running.
+  assert.equal(await page.locator('[data-node-details="linux-memory"]').count(),0);
+  assert.match(await detail.textContent(),/OllamaNot detected in checked locations/);
+  linux.capabilities.inventory.runtimes={ollama:{application:{name:'ollama',version:'0.12.0'}}};await page.locator('#refresh').click();await page.waitForFunction(()=>document.querySelector('[data-node-details="linux-inventory"]').textContent.includes('Running, reported by the server'));
   // Connecting a model server from a machine starts "Add a model" with that machine chosen.
   await page.locator('[data-connect-node="linux"]').click();await page.locator('#models.active').waitFor();await page.locator('#model-drawer').waitFor({state:'visible'});
   assert.equal(await page.locator('[name="model-source"]:checked').inputValue(),'node:linux');

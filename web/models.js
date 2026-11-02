@@ -40,29 +40,38 @@ function readyRow(profile,d){
   const local=isLocalOnLiteLLM(profile,d)?' <span class="badge">Local</span>':'';
   const uses=(profile.uses&&profile.uses.length?profile.uses:[profile.workload_class]).map(u=>USE_LABELS[u]||u).join(", ");
   const served=profile.catalog?.served_model;
-  const reasoning=profile.catalog?.reasoning_levels?.length?`${profile.catalog.reasoning_levels.join(", ")}${profile.catalog.reasoning_verified_at?` (verified ${new Date(profile.catalog.reasoning_verified_at).toLocaleDateString()})`:""}`:"model default only";
+  // The model default is implied; only verified levels are worth a line (UX audit, Oct 2026).
+  const reasoning=profile.catalog?.reasoning_levels?.length?`${profile.catalog.reasoning_levels.join(", ")}${profile.catalog.reasoning_verified_at?` (verified ${new Date(profile.catalog.reasoning_verified_at).toLocaleDateString()})`:""}`:"";
   const pricing=pricingLine(profile.catalog?.pricing);
   const gateway=endpoint?.kind==="litellm";
   const managed=Boolean(endpoint?.managed_identity?.enabled);
-  const indicator=disabled?"ended":profile.last_check_ok===true?"ok":profile.last_check_ok===false?"fault":"unknown";
+  const indicator=disabled?"ended":checkIndicator(profile);
+  // One primary action for the card's state; the rarer ones fold under More (UX audit, Oct 2026).
+  // Both checks prepare the runtime first: on a machine that can wake it and swap the
+  // loaded model, so the click asks first (UX audit, Oct 2026).
+  const machine=profile.node_id?d.nodes.find(node=>node.id===profile.node_id)?.name||"its machine":"";
+  const loads=machine?` data-loads="${esc(machine)}"`:"";
+  const testButton=`<button${disabled?' class="secondary"':""} data-test-model="${esc(profile.id)}"${loads}>Check listing</button>`;
+  const more=[
+    disabled?testButton:"",
+    managed?"":`<button class="secondary" data-generate-model="${esc(profile.id)}"${loads}>Test inference</button>`,
+    gateway?`<button class="secondary" data-sync-model="${esc(profile.id)}">Refresh from gateway</button><button class="secondary" data-verify-model="${esc(profile.id)}">Verify reasoning</button>`:"",
+  ].join("");
   return `<div class="item" data-profile="${esc(profile.id)}">
     ${rowIndicator(indicator)}<strong>${esc(profile.name)}${local}</strong>
     <div class="meta">${disabledStatusHtml(disabled)}</div>
-    <div class="meta model-names">${modelNamesHtml(profile)}</div>
-    <div class="meta"><span>Last health check: ${checkLabel(profile)}</span></div>
+    <div class="meta model-names">${clientNameHtml(profile)}</div>
+    <div class="meta"><span>${esc(String(profile.context_tokens))} context tokens</span><span>Uses: ${esc(uses)}</span>${profile.thinking==="off"?"<span>Thinking off</span>":""}${PROMPTS_GO[profile.data_destination]?`<span>Prompts go ${esc(PROMPTS_GO[profile.data_destination])}</span>`:""}<span>Health: ${checkLabel(profile)}</span></div>
+    ${PROMPTS_GO[profile.data_destination]?"":'<div class="meta"><span class="check-fail">Where prompts go is not declared, so clients cannot use it</span></div>'}
     ${served?`<div class="meta"><span>Served model: ${esc(served)}</span></div>`:""}
-    <div class="meta"><span>${esc(String(profile.context_tokens))} context tokens</span><span>Uses: ${esc(uses)}</span><span>Thinking: ${profile.thinking==="off"?"Off":"Model default"}</span></div>
-    <div class="meta">${PROMPTS_GO[profile.data_destination]?`<span>Prompts go ${esc(PROMPTS_GO[profile.data_destination])}</span>`:'<span class="check-fail">Where prompts go is not declared, so clients cannot use it</span>'}</div>
-    <div class="meta"><span>Reasoning: ${esc(reasoning)}</span></div>
+    ${reasoning?`<div class="meta"><span>Reasoning: ${esc(reasoning)}</span></div>`:""}
     ${pricing?`<div class="meta"><span>${esc(pricing)}</span></div>`:""}
     ${verifyResultsBlock(profile.id)}
     <div class="item-actions">
+      ${disabled?`<button data-enable-model="${esc(profile.id)}">Re-enable</button>`:testButton}
       <button class="secondary" data-edit-model="${esc(profile.id)}">Edit</button>
-      <button class="secondary" data-test-model="${esc(profile.id)}">Test</button>
-      ${managed?'':`<button class="secondary" data-generate-model="${esc(profile.id)}">Generate</button>`}
-      ${gateway?`<button class="secondary" data-sync-model="${esc(profile.id)}">Refresh from gateway</button> <button class="secondary" data-verify-model="${esc(profile.id)}">Verify reasoning</button>`:""}
-      ${disabled?`<button class="secondary" data-enable-model="${esc(profile.id)}">Re-enable</button>`:""}
-      <button class="secondary" data-remove-model="${esc(profile.id)}">Remove</button>
+      <button class="secondary danger" data-remove-model="${esc(profile.id)}">Remove</button>
+      ${more?`<details class="more-actions"><summary>More</summary><div>${more}</div></details>`:""}
     </div>
   </div>`;
 }
@@ -76,10 +85,11 @@ function renderReady(){
     if(!groups.has(key))groups.set(key,{label:groupLabel(profile,d),profiles:[]});
     groups.get(key).profiles.push(profile);
   }
-  container.innerHTML=[...groups.values()].map(group=>`<div class="panel model-group-panel"><h4>${esc(group.label)}</h4><div class="list">${group.profiles.map(profile=>readyRow(profile,d)).join("")}</div></div>`).join("");
+  container.innerHTML=[...groups.values()].map(group=>`<div class="panel model-group-panel"><h3>${esc(group.label)}</h3><div class="list">${group.profiles.map(profile=>readyRow(profile,d)).join("")}</div></div>`).join("");
   container.querySelectorAll("[data-edit-model]").forEach(button=>button.onclick=()=>openModelDrawer(button.dataset.editModel));
-  container.querySelectorAll("[data-test-model]").forEach(button=>button.onclick=()=>testResource(`/api/v1/model-profiles/${button.dataset.testModel}/test`,button,{generate:false}));
-  container.querySelectorAll("[data-generate-model]").forEach(button=>button.onclick=()=>testResource(`/api/v1/model-profiles/${button.dataset.generateModel}/test`,button,{generate:true}));
+  const mayLoad=button=>!button.dataset.loads||confirmLoad(button.dataset.loads);
+  container.querySelectorAll("[data-test-model]").forEach(button=>button.onclick=()=>{if(mayLoad(button))testResource(`/api/v1/model-profiles/${button.dataset.testModel}/test`,button,{generate:false})});
+  container.querySelectorAll("[data-generate-model]").forEach(button=>button.onclick=()=>{if(mayLoad(button))testResource(`/api/v1/model-profiles/${button.dataset.generateModel}/test`,button,{generate:true})});
   container.querySelectorAll("[data-sync-model]").forEach(button=>button.onclick=async()=>{
     await refreshGatewayProfile(button.dataset.syncModel,button);
   });
@@ -91,7 +101,7 @@ function renderReady(){
   });
   container.querySelectorAll("[data-enable-model]").forEach(button=>button.onclick=async()=>{
     button.disabled=true;
-    try{await api(`/api/v1/model-profiles/${encodeURIComponent(button.dataset.enableModel)}/enable`,{method:"POST",body:"{}"});toast("Model profile re-enabled");await refresh()}catch(error){fail(error)}finally{button.disabled=false}
+    try{await api(`/api/v1/model-profiles/${encodeURIComponent(button.dataset.enableModel)}/enable`,{method:"POST",body:"{}"});toast("Model re-enabled");await refresh()}catch(error){fail(error)}finally{button.disabled=false}
   });
   container.querySelectorAll("[data-remove-model]").forEach(button=>button.onclick=async()=>{
     const id=button.dataset.removeModel,item=d.models.find(x=>x.id===id);
@@ -117,18 +127,20 @@ function adminUiUrl(endpoint,route=null){
 function routeRow(endpointId,route){
   const published=route.state==="published";
   const changed=Boolean(route.profile?.model_changed);
-  const stateBadge=changed?badge("review","Published profile needs refresh"):published?badge("ok","Published"):badge("review","Configured route — not published");
+  const stateBadge=changed?badge("review","Published model needs refresh"):published?badge("ok","Published"):badge("review","Configured route — not published");
   const endpoint=state.data.endpoints.find(e=>e.id===endpointId);
-  const price=route.pricing?pricingLine(route.pricing):"No price reported";
+  // The live route's price, else what the published profile charges by, so the two pages agree.
+  const saved=route.profile?.pricing;
+  const price=route.pricing?pricingLine(route.pricing):saved?`${pricingLine(saved)} (saved on the model; the route reports none)`:"No price reported";
   return `<div class="item" data-route="${esc(route.name)}" data-endpoint="${esc(endpointId)}">
     ${rowIndicator(published?"ok":"review")}<strong class="mono">${esc(route.name)}</strong> ${stateBadge}
     <div class="meta"><span>Upstream: ${esc(route.upstream_model||"unknown")}</span><span>Provider: ${esc(route.provider||"unknown")}</span></div>
     <div class="meta"><span>${esc(price)}</span></div>
-    ${changed?`<p class="check-fail">Poundlock still records ${esc(route.profile.served_model||"an unknown model")}. Refresh before using its old reasoning verification; review the profile label and limits separately.</p>`:""}
+    ${changed?`<p class="check-fail">Poundlock still records ${esc(route.profile.served_model||"an unknown model")}. Refresh before using its old reasoning verification; review the label and limits separately.</p>`:""}
     <div class="item-actions">
       ${endpoint?`<a class="secondary button-link" href="${esc(adminUiUrl(endpoint,route.name))}" target="_blank" rel="noopener">Edit route in LiteLLM</a>`:""}
-      <button class="secondary" data-route-test="${esc(route.name)}" data-route-endpoint="${esc(endpointId)}">Test</button>
-      ${published?`<button class="secondary" data-route-sync="${esc(route.profile.id)}">Refresh profile from gateway</button>`:""}
+      <button class="secondary" data-route-test="${esc(route.name)}" data-route-endpoint="${esc(endpointId)}">Check route health</button>
+      ${published?`<button class="secondary" data-route-sync="${esc(route.profile.id)}">Refresh from gateway</button>`:""}
       ${published?"":`<button class="secondary" data-route-publish="${esc(route.name)}" data-route-endpoint="${esc(endpointId)}">Publish</button>`}
     </div>
     <div class="route-test-result meta"></div>
@@ -157,7 +169,7 @@ function renderDiscoverGateways(){
   const box=$("discover-gateways"),gateways=discoveryData?.gateways||[];
   if(!gateways.length){emptyState(box,"No LiteLLM gateways configured.","Add a Gateway (LiteLLM) endpoint on Connections to see its routes here.");return}
   box.className="";
-  box.innerHTML=gateways.map(gateway=>`<div class="panel discover-gateway"><h4>${esc(gateway.endpoint_name)}</h4>${gateway.error?`<p class="check-fail">${esc(gateway.error)}</p>`:""}<div class="list ${gateway.routes.length?"":"empty"}">${gateway.routes.length?gateway.routes.map(route=>routeRow(gateway.endpoint_id,route)).join(""):"No routes reported."}</div></div>`).join("");
+  box.innerHTML=gateways.map(gateway=>`<div class="panel discover-gateway"><h3>${esc(gateway.endpoint_name)}</h3>${gateway.error?`<p class="check-fail">${esc(gateway.error)}</p>`:""}<div class="list ${gateway.routes.length?"":"empty"}">${gateway.routes.length?gateway.routes.map(route=>routeRow(gateway.endpoint_id,route)).join(""):"No routes reported."}</div></div>`).join("");
   wireDiscoverGatewayActions(box);
 }
 function renderDiscoverProviderOptions(){
@@ -191,13 +203,14 @@ function renderDiscoverCatalog(){
     const routed=model.state==="configured_route";
     // Letter badge (see the legend above the list): C = configured route,
     // L = listed by OpenRouter only, not yet routed.
-    const letter=`<span class="letter-badge" title="${routed?"Configured route":"Listed by OpenRouter, not yet routed"}">${routed?"C":"L"}</span>`;
+    const meaning=routed?"Configured route":"Listed by OpenRouter, not yet routed";
+    const letter=`<span class="letter-badge" title="${meaning}" role="img" aria-label="${meaning}">${routed?"C":"L"}</span>`;
     const price=model.pricing?pricingLine(model.pricing):"No price reported";
     const efforts=(model.reasoning_efforts||[]).map(effort=>`<span class="pill">${esc(effort)}</span>`).join("");
-    const action=routed?"":gateways.length?`<button class="secondary" data-route-handoff="${esc(model.id)}">Add route in LiteLLM</button>`:'<span class="hint">Configure a LiteLLM gateway to add a route.</span>';
+    const action=routed?"":gateways.length?`<button class="secondary" data-route-add="${esc(model.id)}">Add and publish…</button>`:'<span class="hint">Configure a LiteLLM gateway to add a route.</span>';
     return `<div class="item">${rowIndicator(routed?"ok":"unknown")}${letter}<strong class="mono">${esc(model.id)}</strong><span>${esc(model.name||model.id)}</span><div class="meta"><span class="mono">${esc(price)}</span>${efforts}</div><div class="item-actions">${action}</div></div>`;
   }).join("");
-  box.querySelectorAll("[data-route-handoff]").forEach(button=>button.onclick=()=>showRouteHandoff(button.dataset.routeHandoff));
+  box.querySelectorAll("[data-route-add]").forEach(button=>button.onclick=()=>showRouteAdd(button.dataset.routeAdd));
 }
 function renderDiscovery(){renderDiscoverGateways();renderDiscoverProviderOptions();renderDiscoverCatalog()}
 let catalogWanted=false;
@@ -222,7 +235,7 @@ function switchModelsView(view){
   document.querySelectorAll(".seg-btn").forEach(button=>{
     const active=button.dataset.modelView===view;
     button.classList.toggle("active",active);
-    button.setAttribute("aria-selected",String(active));
+    button.setAttribute("aria-pressed",String(active));
   });
   $("models-ready").classList.toggle("active",view==="ready");
   $("models-discover").classList.toggle("active",view==="discover");
@@ -243,6 +256,10 @@ function renderModels(){
   renderReady();
 }
 
+// A card names only what clients send; the server's own ID is in the drawer.
+function clientNameHtml(profile){
+  return `<span>Clients use <code class="mono">${esc(profile.name)}</code></span><button type="button" class="secondary copy" data-copy="${esc(profile.name)}" aria-label="Copy the model name ${esc(profile.name)}">Copy</button>`;
+}
 // Both strings a model has, each with a copy button: the name clients send
 // and the server's own ID for the weights behind it.
 function modelNamesHtml(profile){
@@ -273,7 +290,7 @@ function syncRuntimeOptions(preserve=false){
     return;
   }
   select.disabled=false;
-  const html=runtimes.length?runtimes.map(name=>`<option value="${esc(name)}">${name==="ollama"?"Ollama — managed loading and unloading":esc(name)}</option>`).join(""):'<option value="">No runtime profiles reported by this machine</option>';
+  const html=runtimes.length?runtimes.map(name=>`<option value="${esc(name)}">${name==="ollama"?"Ollama — managed loading and unloading":esc(name)}</option>`).join(""):'<option value="">No runtimes reported by this machine</option>';
   if(preserve)updateOptions("model-runtime",html);else{select.innerHTML=html;select.setCustomValidity("")}
 }
 
@@ -294,9 +311,17 @@ function syncMachineFields(){
   hint.hidden=!node;
   hint.textContent=runtime==="ollama"?"Ollama loads the model when a request arrives. The server must be this machine's Ollama.":node&&wake==="never"&&runtimeIdentity(node,runtime)?.servable?`${runtime} loads models. Unless the model stays loaded, choose "Start the model" so requests wait for it.`:"";
 }
-// The default for a machine: wake it when Wake-on-LAN is set up, otherwise
-// start the model only while it is on. The draft check says the same.
-function defaultWake(node){return node?(hasWakeOnLan(node)?"on-demand":"manual"):"never"}
+// A newly chosen machine gets the draft check's answer, as every other
+// default does: the controller holds the rule, not this page.
+async function applyDraftWake(){
+  const node=$("model-node").value,runtime=$("model-runtime").value,endpoint=$("model-endpoint").value,model=$("model-id").value.trim();
+  if(!node||!runtime||!endpoint||!model)return;
+  try{
+    const draft=await api("/api/v1/model-profiles/draft",{method:"POST",body:JSON.stringify({endpoint_id:endpoint,model_id:model,node_id:node,runtime_profile:runtime})});
+    if($("model-node").value!==node||!drawerOpen())return;
+    setRadio("model-wake",draft.wake_policy.value);syncMachineFields();updateDirtyIndicator();
+  }catch{/* the choice shown stays; saving without one takes the controller's default */}
+}
 function syncModelSettings(){
   const uses=radioValue("model-use").split(",");
   $("model-context").min=uses.includes("durable")?8192:1024;
@@ -322,9 +347,9 @@ function renderModelIdOptions(){
   if(reported.length)$("model-ids-note").textContent=`${node.name}'s ${runtime} can serve ${reported.join(", ")}. Clients never send this ID.`;
 }
 // The server's own list, asked for as soon as a server is chosen. Listing
-// records a connection check on the server and publishes nothing.
+// records nothing about the server's health and publishes nothing.
 async function listServerModels(endpointId){
-  const result=await api(`/api/v1/endpoints/${encodeURIComponent(endpointId)}/test`,{method:"POST",body:"{}"});
+  const result=await api(`/api/v1/endpoints/${encodeURIComponent(endpointId)}/models`);
   return [...new Set((result.model_ids||[]).filter(value=>typeof value==="string"))];
 }
 async function fetchModelIds(){
@@ -428,7 +453,7 @@ function renderSourceStep(){
   syncSourceEndpoint();
 }
 function nodeAddresses(node){
-  const listed=typeof nodeInterfaces==="function"?nodeInterfaces(node):[];
+  const listed=nodeInterfaces(node);
   return listed.flatMap(item=>item.addresses||[]).map(address=>String(address).split("/")[0].toLowerCase());
 }
 // The server a machine's model runs behind: the one its other models use,
@@ -453,8 +478,9 @@ function syncSourceEndpoint(){
 }
 $("model-step-source").addEventListener("change",event=>{
   if(event.target.name==="model-source"){
+    // Choosing where it runs is one click to redo, so it alone isn't worth a discard prompt.
     const [kind,id]=event.target.value.split(":");
-    setup.touched=true;setup.model=null;
+    setup.model=null;
     if(kind==="node"){
       const suggestion=suggestServer(nodeById(id));
       setup.nodeId=id;setup.endpointId=suggestion.id;setup.endpointReason=suggestion.reason;
@@ -716,7 +742,7 @@ function renderRouteFacts(item){
   box.hidden=false;
 }
 function showDrawer(){
-  $("model-drawer").hidden=false;$("model-drawer-backdrop").hidden=false;
+  $("model-drawer").hidden=false;$("model-drawer-backdrop").hidden=false;seatToast();
   if(editingModel)$("model-endpoint").focus();
 }
 // `presets`: {nodeId} from a machine's "Connect a model server", or
@@ -766,7 +792,7 @@ function openModelDrawer(id,presets={}){
 }
 function closeDrawer(force=false){
   if(!force&&!confirmDiscardIfDirty())return false;
-  $("model-drawer").hidden=true;$("model-drawer-backdrop").hidden=true;
+  $("model-drawer").hidden=true;$("model-drawer-backdrop").hidden=true;seatToast();
   editingModel=null;modelSnapshot=null;savedRoute=null;setup=null;clearTimeout(draftTimer);
   if(modelOpener&&document.contains(modelOpener))modelOpener.focus();
   modelOpener=null;
@@ -803,21 +829,29 @@ function modelFormBody(){
   const modelId=$("model-id").value.trim();
   if($("model-alias-server-id").checked&&modelId&&!aliases.includes(modelId))aliases.push(modelId);
   const node=$("model-node").value,runtime=$("model-runtime").value;
-  const body={aliases,endpoint_id:$("model-endpoint").value,model_id:modelId,model_label:$("model-label").value.trim()||null,uses:radioValue("model-use").split(","),wake_policy:node?radioValue("model-wake")||defaultWake(modelNode()):"never",thinking:$("model-thinking").value,node_id:node||(editingModel?"":null),runtime_profile:runtime||(editingModel?"":null),idle_seconds:runtime==="ollama"?+$("model-idle").value:null};
+  const body={aliases,endpoint_id:$("model-endpoint").value,model_id:modelId,model_label:$("model-label").value.trim()||null,uses:radioValue("model-use").split(","),thinking:$("model-thinking").value,node_id:node||(editingModel?"":null),runtime_profile:runtime||(editingModel?"":null),idle_seconds:runtime==="ollama"?+$("model-idle").value:null};
   if($("model-context").value)body.context_tokens=+$("model-context").value;
   if($("model-output").value)body.max_output_tokens=+$("model-output").value;
   if(!editingModel)body.name=$("model-name").value.trim();
-  // Without a machine the choice is always "I keep it running"; an edit
-  // leaves whatever value is stored rather than rewriting it.
-  if(editingModel&&!node)delete body.wake_policy;
+  // Without a machine there is no choice: a new model takes the controller's
+  // default ("I keep it running"), and an edit leaves the stored value.
+  const wake=node&&radioValue("model-wake");
+  if(wake)body.wake_policy=wake;
   const mode=destinationMode();
   if(mode==="route"||mode==="own")body.data_destination=radioValue("model-destination");
+  // Declared with the model in one change, so a refused model leaves the server as it was.
+  else if(mode==="declare-server"){body.data_destination=radioValue("model-destination");body.declare_server=true}
   // Moved to a server that declares its own: restate it, as the banner said.
   else if(mode==="server"&&editingModel&&currentRoute()!==savedRoute)body.data_destination=modelEndpoint().data_destination;
   return body;
 }
+// Testing inference on a machine can wake it and replace the model it has loaded.
+function confirmLoad(machine){return confirm(`This may wake ${machine} and load this model, replacing the model it has loaded. Continue?`)}
 async function saveModel(test){
   const mode=destinationMode(),chosen=radioValue("model-destination");
+  const machine=nodeById($("model-node").value);
+  // A gateway with application keys is only listed, so nothing loads.
+  if(test&&machine&&!modelEndpoint()?.managed_identity?.enabled&&!confirmLoad(machine.name))return;
   if(mode!=="server"&&!chosen){toast("Choose where prompts go before saving",true);document.querySelector('[name="model-destination"]').focus();return}
   // A limit hidden behind its summary still has to be valid; show it if not.
   if($("model-limits").hidden&&![$("model-context"),$("model-output")].every(input=>input.checkValidity())){setup.limitsOpen=true;renderLimitsSummary(setup.draft)}
@@ -835,9 +869,6 @@ async function saveModel(test){
     }catch(error){fail(new Error(`Capability evidence: ${error.message}`));for(const button of buttons)button.disabled=false;return}
   }
   try{
-    // A server's declaration is its own resource: declared first, then the
-    // model inherits it like every other model on that server.
-    if(mode==="declare-server")await api(`/api/v1/endpoints/${encodeURIComponent(endpoint.id)}`,{method:"PATCH",body:JSON.stringify({data_destination:chosen})});
     let saved;
     if(!editing&&endpoint.kind==="litellm"){
       const publish={endpoint_id:endpoint.id,route:body.model_id,name:body.name,data_destination:body.data_destination,uses:body.uses,aliases:body.aliases,model_label:body.model_label,thinking:body.thinking};
@@ -872,7 +903,7 @@ $("model-node").addEventListener("change",()=>{
   syncRuntimeOptions();
   // Only a newly chosen machine gets the default; moving between machines
   // keeps the operator's answer.
-  if(!previousNode||!$("model-node").value)setRadio("model-wake",defaultWake(modelNode()));
+  if(!previousNode&&$("model-node").value)applyDraftWake();
   previousNode=$("model-node").value;
   syncMachineFields();syncModelSettings();renderModelIdOptions();
 });

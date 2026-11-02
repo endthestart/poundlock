@@ -21,7 +21,7 @@ const assert=require('node:assert/strict');
     const signedOut=async()=>{
       await page.locator('#unlock').waitFor({state:'visible'});
       assert.equal(await page.locator('#application').isVisible(),false);
-      assert.equal(await page.evaluate(()=>localStorage.getItem('poundlock-token')),null);
+      assert.equal(await page.evaluate(()=>localStorage.getItem('poundlock-token')||sessionStorage.getItem('poundlock-token')),null);
     };
     await page.goto(base);
     await page.locator('#token').fill(token);
@@ -49,6 +49,7 @@ const assert=require('node:assert/strict');
     await page.getByRole('button',{name:'Sign out',exact:true}).click();
     await signedOut();
     await page.locator('#token').fill(token);
+    await page.locator('#remember-token').check();
     await page.getByRole('button',{name:'Unlock',exact:true}).click();
     await page.locator('#application').waitFor({state:'visible'});
     const connected=await page.locator('#status-text').textContent();

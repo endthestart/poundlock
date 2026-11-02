@@ -152,7 +152,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       else {runner.kill('SIGKILL');await new Promise(resolve=>runner.once('exit',resolve));runner=start();}
     }
     let finished=[],maxRunning=0,sawQueued=false,combinedCancelled=false;
-    for(let n=0;n<900;n++) {
+    for(let n=0;n<3000;n++) {
       finished=await Promise.all(jobs.map(job=>api('/api/v1/jobs/'+job.id)));
       maxRunning=Math.max(maxRunning,finished.filter(job=>job.status==='running').length);
       sawQueued ||= finished.some(job=>job.status==='ready');

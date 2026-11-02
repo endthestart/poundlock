@@ -92,7 +92,7 @@ function renderProjects(){
   const list=$("project-list"),projects=state.data.projects||[];
   if(!projects.length){emptyState(list,"No server repositories configured.","Add one below to submit jobs against a repository this controller already has.");return}
   list.className="list";
-  list.innerHTML=projects.map(x=>`<div class="item"><strong>${esc(x.name)}</strong><div class="meta"><span>${esc(x.roots.join(", "))}</span></div>${(x.instruction_files||[]).length?`<div class="meta"><span>${esc(x.instruction_files.join(", "))}</span></div>`:""}<div class="item-actions"><button class="secondary" data-edit-project="${esc(x.id)}">Edit</button> <button class="secondary" data-remove-project="${esc(x.id)}">Remove</button></div></div>`).join("");
+  list.innerHTML=projects.map(x=>`<div class="item"><strong>${esc(x.name)}</strong><div class="meta"><span>${esc(x.roots.join(", "))}</span></div>${(x.instruction_files||[]).length?`<div class="meta"><span>${esc(x.instruction_files.join(", "))}</span></div>`:""}<div class="item-actions"><button class="secondary" data-edit-project="${esc(x.id)}">Edit</button> <button class="secondary danger" data-remove-project="${esc(x.id)}">Remove</button></div></div>`).join("");
   list.querySelectorAll("[data-edit-project]").forEach(button=>button.onclick=()=>editProject(button.dataset.editProject));
   list.querySelectorAll("[data-remove-project]").forEach(button=>button.onclick=async()=>{
     const id=button.dataset.removeProject,item=projects.find(x=>x.id===id);
@@ -107,7 +107,7 @@ function editProject(id){
   const item=state.data.projects.find(x=>x.id===id);if(!item)return;resetProject();editingProject=id;
   $("project-name").value=item.name;$("project-roots").value=item.roots.join("\n");$("project-instructions").value=(item.instruction_files||[]).join("\n");
   $("project-save").textContent="Save changes";$("project-cancel").hidden=false;
-  $("project-panel").open=true;$("project-name").focus();$("project-panel").scrollIntoView({block:"start",behavior:"smooth"});
+  $("project-panel").open=true;$("project-name").focus();$("project-panel").scrollIntoView({block:"start",behavior:motion()});
 }
 $("project-cancel").onclick=resetProject;
 $("project-form").addEventListener("submit",async event=>{
@@ -116,3 +116,121 @@ $("project-form").addEventListener("submit",async event=>{
   try{await api("/api/v1/projects"+(editingProject?"/"+encodeURIComponent(editingProject):""),{method:editingProject?"PATCH":"POST",body:JSON.stringify(body)});resetProject();await refresh();toast("Project saved")}
   catch(error){fail(error)}finally{button.disabled=false}
 });
+
+// Pi's JSON event stream (docs/json.md) read as what the agent said and did.
+// The harness appends the agent's stderr after a separator (harness.rs), and
+// trimming or the runner's "[poundlock] …" notes leave lines that are not
+// events: those are shown as notes. Output with no events at all shows as it is.
+function agentOutput(output){
+  if(!output)return "<pre>No output retained.</pre>";
+  const [stdout,stderr=""]=output.split("\n--- stderr ---\n");
+  const steps=[];let events=0;
+  for(const line of stdout.split("\n").filter(line=>line.trim())){
+    let event;try{event=JSON.parse(line);events++}catch{
+      steps.push(`<p class="hint">${line.startsWith("{")?"An event cut off where the output was trimmed.":esc(line.replace(/^\[poundlock\] /,"").slice(0,300))}</p>`);
+      continue;
+    }
+    const message=event?.type==="message_end"?event.message:null;
+    if(message?.role==="assistant")for(const part of message.content||[]){
+      if(part.type==="text"&&part.text?.trim())steps.push(`<p>${esc(part.text.trim())}</p>`);
+      if(part.type==="toolCall")steps.push(`<p class="hint mono">→ ${esc(part.name)} ${esc(String(Object.values(part.arguments||{})[0]??"").slice(0,160))}</p>`);
+    }
+    if(message?.role==="toolResult"&&message.isError)steps.push(`<p class="check-fail">${esc(message.toolName||"Tool")} failed: ${esc((message.content||[]).map(part=>part.text||"").join(" ").slice(0,300))}</p>`);
+  }
+  if(!events)return `<pre>${esc(output)}</pre>`;
+  const errors=stderr.trim()?`<details><summary>The agent's error output</summary><pre>${esc(stderr)}</pre></details>`:"";
+  return `${steps.join("")||'<p class="hint">The agent said nothing and called no tools.</p>'}${errors}<details><summary>Raw event stream</summary><pre>${esc(stdout)}</pre></details>`;
+}
+// A prompt's first line, without the Markdown heading marks a brief starts with.
+function jobTitle(prompt){return (prompt.split("\n").find(line=>line.trim())||prompt).replace(/^\s*#+\s*/,"").slice(0,90)}
+function renderJobs(){
+  const list=$("job-list"),jobs=state.data.jobs;
+  if(!jobs.length){emptyState(list,"No jobs yet.","Submit one with the form beside this list.");return}
+  list.className="list";list.innerHTML=jobs.map(job=>`<button type="button" class="item${job.status==="running"?" in-flight":""}${job.id===state.selectedJob?" selected":""}" data-job="${esc(job.id)}"${job.id===state.selectedJob?' aria-current="true"':""}>${rowIndicator(jobBucket(job.status))}<strong>${esc(jobTitle(job.prompt))}</strong><div class="meta">${jobBadge(job.status)}${verificationBadge(job)}<span>${new Date(job.created_at).toLocaleString()}</span><span class="mono">${esc(job.id.slice(0,8))}</span></div></button>`).join("");
+  list.querySelectorAll("[data-job]").forEach(item=>item.onclick=()=>showJob(item.dataset.job));
+  if(jobs.length>=state.data.jobs_limit)list.insertAdjacentHTML("beforeend",`<p class="hint">Showing the newest ${esc(state.data.jobs_limit)} jobs. Older jobs are kept and can be read through the API.</p>`);
+}
+
+let renderedJob={id:null,html:""};
+function closeJob(){
+  const closed=state.selectedJob;
+  clearTimeout(state.jobTimer);state.selectedJob=null;renderedJob={id:null,html:""};
+  const detail=$("job-detail");detail.hidden=true;detail.innerHTML="";
+  history.replaceState(null,"","#jobs");renderJobs();
+  // Focus goes back to the job's row rather than to the page.
+  if(closed)document.querySelector(`[data-job="${CSS.escape(closed)}"]`)?.focus();
+}
+async function showJob(id){
+  const newlySelected=state.selectedJob!==id;
+  const snapshot=auth();
+  state.selectedJob=id;clearTimeout(state.jobTimer);
+  try{
+    const [job,events]=await Promise.all([api(`/api/v1/jobs/${id}`),api(`/api/v1/jobs/${id}/events`)]);
+    if(!live(snapshot)||!state.data||state.selectedJob!==id)return;
+    const index=state.data.jobs.findIndex(item=>item.id===job.id);
+    if(index>=0)state.data.jobs[index]=job;else state.data.jobs.unshift(job);
+    renderSummary();renderJobs();
+    const detail=$("job-detail");detail.hidden=false;
+    // A poll keeps what the reader opened and leaves a selection alone.
+    const selection=getSelection();
+    if(!newlySelected&&selection&&!selection.isCollapsed&&detail.contains(selection.anchorNode)){
+      if(!terminal(job.status))state.jobTimer=setTimeout(()=>showJob(id),2000);
+      return;
+    }
+    const opened=newlySelected?null:new Map([...detail.querySelectorAll("details")].map(item=>[item.querySelector("summary")?.textContent,item.open]));
+    const result=job.result,verification=result?.provenance?.verification;
+    const previous=result?.provenance?.previous_attempts||[],attempt=previous.length+1;
+    const html=`<header><div><p class="eyebrow">JOB <code class="mono">${esc(job.id)}</code></p><h3>${jobBadge(job.status)} ${esc(jobTitle(job.prompt))}</h3></div><div class="actions">${terminal(job.status)||!canJob("jobs:cancel")?"":`<button id="cancel-job">Cancel</button>`}<button id="close-job" type="button" class="secondary">Close</button></div></header>
+      ${job.error?`<p class="check-fail">${esc(job.error.message||job.error.code)}</p>`:""}
+      ${result?`<div class="result-summary"><strong>${verification?.status==="passed"?"Checks passed":verification?.status==="failed"?"Checks failed":"Unverified"}</strong><span>${attempt} attempt${attempt===1?"":"s"}</span><span>${result.cleanup?.containers_removed&&result.cleanup?.attempt_directory_removed?"Working files removed":"See cleanup details"}</span></div>${verificationDetails(verification)}${patchDetails(result.patches||[],attempt)}
+      ${previous.length?`<details><summary>Earlier attempts (${previous.length})</summary>${previous.map(item=>`<h4>Attempt ${esc(item.number)}</h4>${verificationDetails(item.verification)}${patchDetails(item.patches||[],item.number)}<details><summary>Agent output</summary>${agentOutput(item.output)}</details>`).join("")}</details>`:""}
+      <details><summary>Agent output</summary>${agentOutput(result.output)}</details>`:""}
+      <details ${terminal(job.status)?"":"open"}><summary>Timeline</summary><div class="list">${events.map(e=>`<div class="item"><strong>${esc(e.message)}</strong><div class="meta"><span>${new Date(e.created_at).toLocaleTimeString()}</span></div></div>`).join("")}</div></details>
+      <details><summary>Job details</summary><h4>Request</h4><pre>${esc(job.prompt)}</pre><h4>Checks and permissions</h4><pre>${esc(JSON.stringify(job.policy||{},null,2))}</pre>${job.error?`<h4>Error details</h4><pre>${esc(JSON.stringify(job.error,null,2))}</pre>`:""}${result?`<h4>Provenance</h4><pre>${esc(JSON.stringify({...result.provenance,previous_attempts:undefined},null,2))}</pre><h4>Cleanup</h4><pre>${esc(JSON.stringify(result.cleanup,null,2))}</pre>`:""}</details>`;
+    // Unchanged, the detail is left as it is; changed, it keeps the reader's focus and scroll.
+    if(!newlySelected&&renderedJob.id===id&&renderedJob.html===html){
+      if(!terminal(job.status))state.jobTimer=setTimeout(()=>showJob(id),2000);
+      return;
+    }
+    const place=newlySelected?null:keepPlace(detail);
+    detail.innerHTML=html;renderedJob={id,html};
+    if(opened)for(const item of detail.querySelectorAll("details")){const open=opened.get(item.querySelector("summary")?.textContent);if(open!==undefined)item.open=open}
+    if(place)restorePlace(detail,place);
+    detail.querySelectorAll("[data-patch]").forEach(button=>button.onclick=()=>downloadPatch(job.id,button.dataset.patch,button.dataset.attempt));
+    $("close-job").onclick=closeJob;
+    // The open job is in the address, so it can be linked and reopened.
+    if(location.hash!==`#jobs/${id}`)history.replaceState(null,"",`#jobs/${id}`);
+    $("cancel-job")?.addEventListener("click",async event=>{
+      if(!confirm("Cancel this job? Its work stops and its uploaded source is deleted. The prompt, results and events are kept."))return;
+      const button=event.currentTarget;button.disabled=true;
+      try{await api(`/api/v1/jobs/${id}/cancel`,{method:"POST",body:"{}"});toast("Cancellation requested");await refresh();await showJob(id)}
+      catch(error){button.disabled=false;fail(error)}
+    });
+    if(newlySelected){
+      // Opening a job moves focus to it, so a keyboard user lands on what opened (UX audit, 30 Oct).
+      const heading=detail.querySelector("h3");heading?.setAttribute("tabindex","-1");heading?.focus({preventScroll:true});
+      detail.scrollIntoView({behavior:motion(),block:"start"});
+    }
+    if(!terminal(job.status)&&state.selectedJob===id&&live(snapshot))state.jobTimer=setTimeout(()=>showJob(id),2000);
+  }catch(error){fail(error)}
+}
+
+function verificationDetails(report){
+  if(!report)return `<p class="hint">No independent verification was recorded.</p>`;
+  return `<p>${esc(report.reason||"No verification commands were supplied.")}</p>${report.changed_protected_paths?.length?`<p class="check-fail">Changed protected paths: ${esc(report.changed_protected_paths.join(", "))}</p>`:""}${report.flagged_paths?.length?`<p class="check-fail">Review before applying; these change how Git applies or checks out files: ${esc(report.flagged_paths.join(", "))}</p>`:""}${(report.commands||[]).map(check=>`<details><summary>${check.exit_code===0&&!check.truncated&&!check.error?"Passed":"Failed"}: ${esc(check.command)}</summary><p class="hint">${esc(check.cwd||"Starting folder")} · ${esc(check.duration_ms)} ms · Exit ${esc(check.exit_code??"unavailable")}${check.truncated?" · Output truncated":""}</p>${check.error?`<p class="check-fail">${esc(check.error)}</p>`:""}<pre>${esc(check.output||"No output.")}</pre></details>`).join("")}`;
+}
+function patchDetails(patches,attempt){
+  if(!patches.some(patch=>patch.patch))return `<p class="hint">No code changes were retained for this attempt.</p>`;
+  return patches.map((patch,index)=>patch.patch?`<section class="patch"><div class="patch-heading"><h4>${esc(patch.root)}</h4><button class="secondary" data-patch="${index}" data-attempt="${esc(attempt)}">Download patch</button></div><p class="hint">Base revision: ${esc(patch.base_revision)}</p><details open><summary>View changes</summary><pre class="diff">${patch.patch.split("\n").map(line=>`<span class="${line.startsWith("+")?"diff-add":line.startsWith("-")?"diff-remove":""}">${esc(line)}</span>`).join("\n")}</pre></details></section>`:"").join("");
+}
+async function downloadPatch(id,index,attempt){
+  const snapshot=auth();
+  try{
+    const {response}=await authorized(`/api/v1/jobs/${encodeURIComponent(id)}/patches/${index}?attempt=${encodeURIComponent(attempt)}`);
+    if(!response.ok)throw new Error(`Patch download failed (${response.status}).`);
+    const blob=await response.blob();
+    if(!live(snapshot))throw staleError();
+    const url=URL.createObjectURL(blob),link=document.createElement("a");
+    link.href=url;link.download=`poundlock-${id.slice(0,8)}-attempt-${attempt}-root-${index}.patch`;link.click();setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }catch(error){fail(error)}
+}
