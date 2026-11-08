@@ -83,10 +83,7 @@ impl ManagedIdentityManager {
             status = "blocked";
             reason = Some(destination_reason);
         } else if endpoint.kind == "litellm" && endpoint.managed_identity.enabled {
-            if profile.data_destination == "external"
-                && (endpoint.managed_identity.max_budget.is_none()
-                    || endpoint.managed_identity.budget_duration.is_none())
-            {
+            if profile.data_destination == "external" && !self.external_spend_bounded(endpoint)? {
                 status = "blocked";
                 reason = Some("managed_budget_required");
             } else {
@@ -287,14 +284,21 @@ impl ManagedIdentityManager {
         Ok(Some(mapping.virtual_key))
     }
 
+    /// Whether a managed key's external spend has a limit: its own budget and
+    /// reset period, or the install's frontier ceiling, which covers every key.
+    fn external_spend_bounded(&self, endpoint: &Endpoint) -> Result<bool> {
+        let own = endpoint.managed_identity.max_budget.is_some()
+            && endpoint.managed_identity.budget_duration.is_some();
+        Ok(own || self.store.frontier_budget()?.configured())
+    }
+
     fn allowed_model_ids(
         &self,
         principal: &ApiTokenPrincipal,
         endpoint: &Endpoint,
     ) -> Result<Vec<String>> {
-        let allow_external = principal.has_permission("external:invoke")
-            && endpoint.managed_identity.max_budget.is_some()
-            && endpoint.managed_identity.budget_duration.is_some();
+        let allow_external =
+            principal.has_permission("external:invoke") && self.external_spend_bounded(endpoint)?;
         let mut models = self
             .store
             .list_model_profiles()?
@@ -1029,6 +1033,25 @@ mod tests {
             .unwrap();
         assert_eq!(unbudgeted["availability"], "blocked");
         assert_eq!(unbudgeted["blocked_reason"], "managed_budget_required");
+
+        // The install's frontier ceiling bounds every key, so a per-key budget
+        // becomes optional once one is set.
+        store
+            .save_frontier_budget(&crate::budget::FrontierBudget {
+                monthly_usd: Some(100.0),
+                ..Default::default()
+            })
+            .unwrap();
+        let ceilinged = manager
+            .access_for(&principal, &profile, &endpoint.endpoint)
+            .unwrap();
+        assert_ne!(ceilinged["blocked_reason"], "managed_budget_required");
+        assert!(
+            manager
+                .allowed_model_ids(&principal, &endpoint.endpoint)
+                .unwrap()
+                .contains(&profile.model_id)
+        );
     }
 
     #[tokio::test]

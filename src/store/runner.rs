@@ -53,15 +53,25 @@ impl Store {
     pub fn claim_runner_job(&self, wall_seconds: Option<u64>) -> Result<Option<String>> {
         let mut connection = self.connection()?;
         let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let id: Option<String> = transaction
+        let claimed: Option<(String, Option<String>)> = transaction
             .query_row(
-                "SELECT id FROM jobs WHERE status='ready' AND cancel_requested=0
+                "SELECT id,policy_json FROM jobs WHERE status='ready' AND cancel_requested=0
              ORDER BY created_at LIMIT 1",
                 [],
-                |row| row.get(0),
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
-        if let Some(id) = &id {
+        let id = claimed.as_ref().map(|(id, _)| id.clone());
+        if let Some((id, policy)) = &claimed {
+            // A job's own wall budget, when shorter, is the budget it runs under.
+            let budget = policy
+                .as_deref()
+                .and_then(|policy| {
+                    serde_json::from_str::<crate::job_policy::JobPolicy>(policy).ok()
+                })
+                .map(|policy| policy.budget)
+                .unwrap_or_default();
+            let wall_seconds = wall_seconds.map(|seconds| budget.wall_seconds_with(seconds));
             let claimed_at = Utc::now();
             let expiry = (claimed_at + Duration::seconds(120)).to_rfc3339();
             let deadline_at = wall_seconds

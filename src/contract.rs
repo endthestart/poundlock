@@ -1,7 +1,7 @@
 use serde_json::{Value, json};
 
 pub const API_MAJOR: u32 = 1;
-pub const CONTRACT_REVISION: u32 = 5;
+pub const CONTRACT_REVISION: u32 = 7;
 pub const SCHEMA_VERSION: u32 = 1;
 
 pub const FEATURE_ACCESS_PREFLIGHT: &str = "access_preflight";
@@ -16,6 +16,15 @@ pub const FEATURE_CAPACITY_QUEUE: &str = "capacity_queue";
 pub const FEATURE_DATA_DESTINATION: &str = "data_destination";
 pub const FEATURE_DURABLE_JOBS: &str = "durable_jobs";
 pub const FEATURE_EXTERNAL_INVOKE: &str = "external_invoke_permission";
+/// One weekly and one monthly ceiling on external spend for the whole install:
+/// `frontier_budget` on usage, preflight and external `/v1/models` rows, and
+/// `frontier_budget_exhausted` / `frontier_budget_unpriced` refusals
+/// (revision 6).
+pub const FEATURE_FRONTIER_BUDGET: &str = "frontier_budget";
+/// `policy.budget` on a durable job: its own wall seconds and external spend,
+/// refused with `job_budget_exhausted` / `job_budget_unpriced`, and
+/// `frontier_spend_usd` on the job (revision 7).
+pub const FEATURE_JOB_BUDGET: &str = "job_budget";
 pub const FEATURE_MANAGED_IDENTITIES: &str = "managed_application_identities";
 /// `poundlock.status` and `poundlock.disabled`: a profile taken out of
 /// service on authoritative evidence stays listed, with why (revision 4).
@@ -36,7 +45,7 @@ pub const FEATURE_ROUTING_REVISION: &str = "routing_revision";
 pub const FEATURE_USAGE_SUMMARY: &str = "usage_summary";
 pub const FEATURE_VERIFIER_TOOLCHAIN: &str = "verifier_toolchain";
 
-pub const CAPABILITY_FEATURES: [&str; 16] = [
+pub const CAPABILITY_FEATURES: [&str; 18] = [
     FEATURE_ACCESS_PREFLIGHT,
     FEATURE_AVAILABILITY_REASONS,
     FEATURE_CALLER_PERMISSIONS,
@@ -45,6 +54,8 @@ pub const CAPABILITY_FEATURES: [&str; 16] = [
     FEATURE_DATA_DESTINATION,
     FEATURE_DURABLE_JOBS,
     FEATURE_EXTERNAL_INVOKE,
+    FEATURE_FRONTIER_BUDGET,
+    FEATURE_JOB_BUDGET,
     FEATURE_MANAGED_IDENTITIES,
     FEATURE_MODEL_STATUS,
     FEATURE_PERMISSION_LABELS,
@@ -118,12 +129,12 @@ mod tests {
     #[test]
     fn published_fixtures_match_the_runtime_contract() {
         let models: Value = serde_json::from_str(include_str!(
-            "../docs/reference/fixtures/models-contract-revision-5.json"
+            "../docs/reference/fixtures/models-contract-revision-7.json"
         ))
         .unwrap();
         assert_eq!(models["poundlock"], models_poundlock_metadata());
         let capabilities: Value = serde_json::from_str(include_str!(
-            "../docs/reference/fixtures/capabilities-contract-revision-5.json"
+            "../docs/reference/fixtures/capabilities-contract-revision-7.json"
         ))
         .unwrap();
         assert_eq!(

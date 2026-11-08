@@ -1,0 +1,16 @@
+{
+  "mcpServers": {
+    "poundlock": {
+      "command": "poundlock",
+      "args": [
+        "mcp",
+        "--controller",
+        "https://poundlock.example.net",
+        "--token-file",
+        "${HOME}/.config/poundlock/agent-token",
+        "--root",
+        "."
+      ]
+    }
+  }
+}

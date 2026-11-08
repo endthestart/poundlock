@@ -256,9 +256,21 @@ exists.
 
 Known blocked reasons include `external_permission_required`,
 `data_destination_confirmation_required`,
-`managed_budget_required`, `managed_identity_provision_failed`, and
-`managed_identity_reconciliation_required`. An external profile requires both
-the ordinary operation permission and `external:invoke`.
+`managed_budget_required`, `managed_identity_provision_failed`,
+`managed_identity_reconciliation_required`, and, since contract revision 6,
+`frontier_budget_exhausted` and `frontier_budget_unpriced`. An external profile
+requires both the ordinary operation permission and `external:invoke`.
+`managed_budget_required` means a LiteLLM endpoint that issues managed keys has
+no per-key budget and reset period while the install has no frontier budget;
+either one bounds external spend.
+
+When the operator has set a [frontier budget](frontier-budget.md), external
+profiles also carry `poundlock.frontier_budget` (`state`, `remaining_usd`,
+`resets_at`) on `/v1/models` and `frontier_budget` on preflight, and warn
+`frontier_budget_low` past the operator's warning share. A refused request gets
+HTTP 403 `frontier_budget_exhausted` and was never sent upstream; do not retry
+it before the reset. `GET /api/v1/usage` reports the install's standing for
+every application in `frontier_budget`.
 
 Access preflight checks credentials and policy first. When those pass, an
 inference preflight also reports the node/runtime state that admission would
@@ -328,6 +340,12 @@ separate machines concurrently; Poundlock does not automatically split a task or
 merge conflicting patches. The orchestrator owns review and integration.
 
 See [job API](jobs.md) for request examples and error handling.
+
+## Outside agents
+
+An agent such as Claude Code can delegate its coding to durable jobs through
+`poundlock mcp`, a Model Context Protocol server. See
+[Let an outside agent delegate coding to Poundlock](agents.md).
 
 ## Optional ACP adapter
 

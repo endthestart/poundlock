@@ -82,9 +82,12 @@ async fn overview(State(state): State<AppState>, headers: HeaderMap) -> ApiResul
         "api_tokens":state.store.list_api_tokens()?,
         "token_permissions":crate::contract::token_permissions(),
         "managed_identities":state.store.managed_litellm_key_statuses()?,
+        "frontier_budget":super::budget::operator_view(&state)?,
         "jobs":state.store.list_jobs(OVERVIEW_JOB_LIMIT)?,
         "jobs_limit":OVERVIEW_JOB_LIMIT,
         "build":option_env!("POUNDLOCK_BUILD_COMMIT").filter(|commit| !commit.is_empty()).map(|commit| &commit[..commit.len().min(7)]),
+        "runner":{"status":state.runners.status(),"host":state.runners.host(),
+            "required_worker_runtime":state.config.required_worker_runtime},
         "occupancy":state.occupancy.named_snapshot(&state.store.list_model_profiles()?)}),
     ))
 }
@@ -655,6 +658,26 @@ async fn test_model(
         }
     };
     let _runtime_lease = runtime_lease;
+    // A probe reports no usage to the caller, so its charge is its estimate.
+    let mut metering = if input.generate {
+        let mut metering = super::budget_metering::admit(
+            &state,
+            &profile,
+            &json!({"max_tokens": profile.max_output_tokens.min(512)}),
+            super::budget_metering::Origin {
+                request_id: &lease_id,
+                api_token_id: "operator",
+                kind: "check",
+                job_id: None,
+            },
+        )?;
+        if let Some(metering) = &mut metering {
+            metering.dispatched();
+        }
+        metering
+    } else {
+        None
+    };
     let response = if input.generate && profile.uses.contains("completion") {
         state
             .inference
@@ -679,6 +702,9 @@ async fn test_model(
             Ok(Json(body))
         }
         Err(error) => {
+            if let Some(metering) = metering.take() {
+                metering.cancel();
+            }
             tracing::warn!(profile = %profile.name, %error, "model compatibility check failed");
             let message = state
                 .inference

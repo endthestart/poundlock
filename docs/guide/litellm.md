@@ -86,6 +86,10 @@ request.
 
 ## Budgets, usage, rotation, and revocation
 
+These budgets apply to each application's virtual key separately. For one
+ceiling on everything sent to external models, across every application and
+gateway, set a [frontier budget](frontier-budget.md) as well.
+
 An application token with `models:read` can request `GET /api/v1/usage`.
 Poundlock returns configured policy plus the safe usage fields that LiteLLM
 reports, such as spend, maximum budget, reset time, expiry, rate limits, and

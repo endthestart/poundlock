@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """The version of a main build: the next minor release after Cargo.toml's, as a
-prerelease ordered by commit time (UTC), for example 0.4.0-dev.20261030013000.
+prerelease ordered by commit time (UTC), for example 0.5.0-dev.20261030013000.
 
 Nodes install only a higher version, so every main build has to sort above the
 last release and the main build before it, and below the release it leads to.

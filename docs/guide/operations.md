@@ -77,6 +77,50 @@ Less common settings:
 
 Set the first two in `.env` and run `docker compose up -d`.
 
+## Run jobs in their own VM
+
+The supervisor drives Docker through the host's socket, and that socket is root
+on the host. To keep jobs off the controller's host entirely, run the supervisor
+on a small Linux VM with its own Docker and gVisor. Jobs need no GPU; models stay
+on the inference machines. The VM needs only to reach the controller.
+
+1. Create a Debian or Ubuntu VM: 2 CPUs and 8 GiB of memory per job you want to
+   run at once, and 20 GiB of disk. Do not share the controller host's Docker
+   socket, data or home folders with it.
+2. Copy the controller's runner token to the VM, readable only by you:
+
+   ```sh
+   docker compose cp controller:/run/poundlock/runner-token ./runner-token
+   ```
+
+3. On the VM, unpack the same release bundle and run:
+
+   ```sh
+   sudo bash deploy/runner-vm/setup.sh install --controller http://CONTROLLER:7331 \
+     --image "$(grep ^POUNDLOCK_IMAGE= .env | cut -d= -f2)" --runner-token-file ./runner-token
+   ```
+
+   It installs Docker Engine and gVisor from their apt repositories when they
+   are missing, registers `runsc` with Docker, checks that the image starts
+   under gVisor, and starts `compose.runner.yaml` with
+   `POUNDLOCK_WORKER_RUNTIME=runsc`. Delete the copied token afterwards.
+4. On the controller host, stop the local runner and refuse any runner that
+   does not use gVisor. In `.env`:
+
+   ```sh
+   POUNDLOCK_LOCAL_RUNNERS=0
+   POUNDLOCK_REQUIRED_WORKER_RUNTIME=runsc
+   ```
+
+   then `docker compose up -d`. The overview's **Job runner** card shows where
+   jobs run and their isolation. A runner whose workers do not use the required
+   runtime is refused work (`worker_runtime_required`) and the card says so.
+
+A runner's report is its own statement: the required runtime keeps jobs from a
+runner left on the controller host by mistake, not from someone holding the
+runner token. Use `setup.sh doctor` on the VM to check it, and `setup.sh upgrade
+--image REF` with each release.
+
 ## Wake-on-LAN
 
 On a Linux controller host, enable the private wake relay:

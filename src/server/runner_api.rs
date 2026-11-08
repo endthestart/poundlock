@@ -15,30 +15,88 @@ use tokio::sync::Semaphore;
 /// as connected. Idle runners poll for work every few seconds.
 pub(crate) const RUNNER_PRESENCE_SECONDS: u64 = 60;
 
-/// In-memory record of the most recent authenticated runner contact. It is a
-/// diagnostic signal for clients, not an admission gate: queued jobs wait for
-/// a runner either way.
+/// In-memory record of the most recent authenticated runner contact, and the
+/// host it last reported. It is a diagnostic signal for clients, not an
+/// admission gate: queued jobs wait for a runner either way.
 #[derive(Clone, Default)]
-pub struct RunnerPresence(Arc<std::sync::Mutex<Option<std::time::Instant>>>);
+pub struct RunnerPresence(Arc<std::sync::Mutex<Presence>>);
+
+#[derive(Default)]
+struct Presence {
+    last: Option<std::time::Instant>,
+    host: Option<Value>,
+}
 
 impl RunnerPresence {
     pub fn record(&self) {
-        if let Ok(mut last) = self.0.lock() {
-            *last = Some(std::time::Instant::now());
+        if let Ok(mut presence) = self.0.lock() {
+            presence.last = Some(std::time::Instant::now());
         }
     }
 
-    pub fn status(&self) -> &'static str {
-        let recent = self
-            .0
+    fn record_host(&self, host: Value) {
+        if let Ok(mut presence) = self.0.lock() {
+            presence.host = Some(host);
+        }
+    }
+
+    fn recent(&self) -> bool {
+        self.0
             .lock()
             .ok()
-            .and_then(|last| *last)
+            .and_then(|presence| presence.last)
             .is_some_and(|last| {
                 last.elapsed() <= std::time::Duration::from_secs(RUNNER_PRESENCE_SECONDS)
-            });
-        if recent { "connected" } else { "not_seen" }
+            })
     }
+
+    pub fn status(&self) -> &'static str {
+        if self.recent() {
+            "connected"
+        } else {
+            "not_seen"
+        }
+    }
+
+    /// What the most recently connected runner said about where jobs run, or
+    /// `None` when no runner is connected or it said nothing.
+    pub fn host(&self) -> Option<Value> {
+        if !self.recent() {
+            return None;
+        }
+        self.0
+            .lock()
+            .ok()
+            .and_then(|presence| presence.host.clone())
+    }
+}
+
+/// The fields of a runner's host report the controller keeps, each a short
+/// string, so a runner cannot store arbitrary data here.
+fn kept_host_report(host: &Value) -> Option<Value> {
+    let host = host.as_object()?;
+    let mut kept = serde_json::Map::new();
+    for key in [
+        "engine_name",
+        "engine_version",
+        "operating_system",
+        "kernel",
+        "architecture",
+        "worker_runtime",
+        "isolation",
+        "runner_version",
+    ] {
+        if let Some(value) = host.get(key).and_then(Value::as_str) {
+            kept.insert(
+                key.into(),
+                json!(value.chars().take(128).collect::<String>()),
+            );
+        }
+    }
+    if let Some(capacity) = host.get("capacity").and_then(Value::as_u64) {
+        kept.insert("capacity".into(), json!(capacity.min(64)));
+    }
+    Some(Value::Object(kept))
 }
 
 pub fn routes(state: AppState) -> Router<AppState> {
@@ -95,6 +153,30 @@ async fn claim(
     Json(input): Json<ClaimRequest>,
 ) -> ApiResult<Json<Option<RunnerPackage>>> {
     runner_auth(&state, &headers)?;
+    let host = input.host.as_ref().and_then(kept_host_report);
+    if let Some(host) = &host {
+        state.runners.record_host(host.clone());
+    }
+    if let Some(required) = &state.config.required_worker_runtime {
+        let reported = host
+            .as_ref()
+            .and_then(|host| host["worker_runtime"].as_str())
+            .unwrap_or("unreported");
+        if reported != required {
+            tracing::warn!(
+                required = %required,
+                reported,
+                engine = host.as_ref().and_then(|host| host["engine_name"].as_str()).unwrap_or("unreported"),
+                "refused a runner whose jobs would not run under the required runtime"
+            );
+            return Err(ApiError::forbidden(
+                "worker_runtime_required",
+                format!(
+                    "this controller gives jobs only to runners whose job containers use {required}; this runner reports {reported}"
+                ),
+            ));
+        }
+    }
     let Some(id) = state.store.claim_runner_job(input.wall_seconds)? else {
         return Ok(Json(None));
     };
@@ -290,6 +372,9 @@ async fn fail(
 struct ClaimRequest {
     #[serde(default)]
     wall_seconds: Option<u64>,
+    /// Where the runner's jobs run; see `runner_docker::host_report`.
+    #[serde(default)]
+    host: Option<Value>,
 }
 
 #[derive(Deserialize)]

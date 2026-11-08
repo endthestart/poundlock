@@ -1554,3 +1554,14 @@ th {
   white-space: nowrap;
   border: 0;
 }
+.inline-form {
+  display: flex;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 8px 12px;
+  margin: 8px 0 0;
+}
+.inline-form label {
+  max-width: 14rem;
+}

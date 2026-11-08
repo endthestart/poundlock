@@ -123,6 +123,8 @@ async fn revoke_token(
 async fn usage(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<Json<Value>> {
     let principal = super::api_token_auth(&state, &headers, "models:read")?;
     let mut usage = state.managed_identities.usage_for(&principal).await?;
+    // The install's standing, which every application shares; not who spent.
+    usage["frontier_budget"] = super::budget::BudgetView::load(&state)?.to_json();
     usage["schema_version"] = json!(1);
     Ok(Json(usage))
 }
@@ -175,6 +177,7 @@ async fn preflight(
             access
         }
     };
+    super::budget::BudgetView::load(&state)?.apply_access(&profile, &mut access);
     // Credentials and policy take precedence. When those pass, reuse the
     // admission checks so a client can tell an offline or paused machine and
     // an occupied slot apart from a credential problem before it starts work.

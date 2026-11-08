@@ -2383,7 +2383,7 @@ fn contract_revision_4_row() -> Value {
 #[test]
 fn published_models_fixture_is_what_the_relay_emits() {
     let fixture: Value = serde_json::from_str(include_str!(
-        "../../docs/reference/fixtures/models-contract-revision-5.json"
+        "../../docs/reference/fixtures/models-contract-revision-7.json"
     ))
     .unwrap();
     if std::env::var_os("POUNDLOCK_WRITE_FIXTURES").is_some() {
@@ -2395,7 +2395,7 @@ fn published_models_fixture_is_what_the_relay_emits() {
         std::fs::write(
             concat!(
                 env!("CARGO_MANIFEST_DIR"),
-                "/docs/reference/fixtures/models-contract-revision-5.json"
+                "/docs/reference/fixtures/models-contract-revision-7.json"
             ),
             serde_json::to_string_pretty(&document).unwrap() + "\n",
         )

@@ -92,6 +92,9 @@ async fn job_options(
         "git_hosts":state.config.git_hosts,
         "outbound_network_allowed":state.config.allow_job_network,
         "runner_status":state.runners.status(),
+        // How the connected runner isolates jobs, `gvisor` or `container`; not
+        // which machine it is.
+        "runner_isolation":state.runners.host().and_then(|host| host.get("isolation").cloned()),
         "source_limits":{"bytes":crate::source::MAX_SOURCE_BYTES,"files":10000},
         "active_jobs_per_token":state.config.max_active_jobs_per_token,
         "jobs_limit":JOB_LIST_LIMIT,
@@ -129,6 +132,10 @@ fn policy_limits() -> Value {
             "min": policy::MIN_VERIFICATION_TIMEOUT_SECONDS,
             "max": policy::MAX_VERIFICATION_TIMEOUT_SECONDS,
             "default": policy::DEFAULT_VERIFICATION_TIMEOUT_SECONDS,
+        },
+        "budget": {
+            "wall_seconds": {"min": crate::job_budget::MIN_JOB_WALL_SECONDS, "max": crate::job_budget::MAX_JOB_WALL_SECONDS},
+            "frontier_cents": {"min": 1, "max": crate::job_budget::MAX_JOB_FRONTIER_CENTS},
         },
     })
 }
@@ -387,6 +394,10 @@ async fn get_job(
         .ok_or_else(|| ApiError::not_found("job not found"))?;
     let mut value = serde_json::to_value(&job).unwrap_or_else(|_| json!({}));
     attach_wall_budget(&state, &id, &mut value)?;
+    let spent = state.store.frontier_spend_for_job(&id)?;
+    if spent > 0.0 || job.policy.budget.frontier_cents.is_some() {
+        value["frontier_spend_usd"] = json!(spent);
+    }
     Ok(Json(value))
 }
 

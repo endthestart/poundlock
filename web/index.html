@@ -309,8 +309,8 @@ sudo bash ./poundlock-node.sh resume</pre>
               <label>Application access<select id="endpoint-connection-mode"><option value="gateway_only">Shared gateway key</option><option value="managed_applications">A key and budget per application</option></select></label>
               <p class="hint">Shared access uses the saved gateway key. Separate keys require LiteLLM with a database and an administrative key.</p>
               <div id="endpoint-managed-policy" hidden>
-                <div class="inline"><label>Maximum spend<input id="endpoint-managed-budget" type="number" min="0.01" step="0.01" placeholder="Required for external models"></label><label>Budget period<select id="endpoint-managed-budget-duration"><option value="">Select a reset period</option><option value="1d">Daily</option><option value="7d">Weekly</option><option value="30d">Monthly</option></select></label></div>
-                <p class="hint">Each application key gets its own copy of this limit. External models stay blocked until both values are set.</p>
+                <div class="inline"><label>Maximum spend<input id="endpoint-managed-budget" type="number" min="0.01" step="0.01" placeholder="Optional with a frontier budget"></label><label>Budget period<select id="endpoint-managed-budget-duration"><option value="">Select a reset period</option><option value="1d">Daily</option><option value="7d">Weekly</option><option value="30d">Monthly</option></select></label></div>
+                <p class="hint">Each application key gets its own copy of this limit. External models stay blocked until both values are set, unless a frontier budget is set.</p>
                 <details><summary>Advanced key limits</summary>
                   <div class="inline"><label>Key lifetime<input id="endpoint-managed-duration" placeholder="For example, 90d"></label><label>Requests per minute<input id="endpoint-managed-rpm" type="number" min="1" placeholder="Optional"></label></div>
                   <label>Tokens per minute<input id="endpoint-managed-tpm" type="number" min="1" placeholder="Optional"></label>
@@ -350,6 +350,21 @@ sudo bash ./poundlock-node.sh resume</pre>
             <div id="api-token-list" class="list empty">No application tokens.</div>
             <button id="api-token-revoked" type="button" class="secondary" aria-controls="api-token-list" aria-expanded="false" hidden></button>
           </div>
+          <form id="frontier-budget-form" class="panel">
+            <h3>Frontier budget</h3>
+            <p class="hint">One ceiling for everything sent to external models, across every application token and durable job. Poundlock meters each request itself, with or without LiteLLM. When a ceiling is reached, new external work is refused until it resets; requests already running finish. Spend is an estimate, never a bill.</p>
+            <div id="frontier-budget-standing" class="list empty">No ceiling set. External spend is still recorded.</div>
+            <div class="grid two">
+              <label>Weekly ceiling (US$)<input id="frontier-budget-weekly" type="number" min="0.01" step="0.01" placeholder="No weekly ceiling"></label>
+              <label>Monthly ceiling (US$)<input id="frontier-budget-monthly" type="number" min="0.01" step="0.01" placeholder="No monthly ceiling"></label>
+              <label>Warn applications at (%)<input id="frontier-budget-warn" type="number" min="1" max="99" step="1" value="80"></label>
+              <label>Periods begin at UTC offset (hours)<input id="frontier-budget-offset" type="number" min="-14" max="14" step="0.25" value="0"></label>
+            </div>
+            <p class="hint">Weeks begin on Monday and months on the 1st, at midnight at this offset. It does not follow daylight saving. An external model needs a published price to run under a ceiling.</p>
+            <button>Save budget</button>
+            <h4>Spend this period</h4>
+            <div id="frontier-budget-spend" class="list empty">No external spend recorded.</div>
+          </form>
           <div class="panel">
             <h3>LiteLLM application keys</h3>
             <p class="hint">Shown only for gateways that give each application its own key. Failed and pending revocations are retried automatically.</p>

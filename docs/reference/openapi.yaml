@@ -1,11 +1,11 @@
 openapi: 3.1.0
 info:
   title: Poundlock application API
-  version: 0.4.0
+  version: 0.4.4
   x-poundlock-api-major: 1
-  x-poundlock-contract-revision: 5
+  x-poundlock-contract-revision: 7
   description: >-
-    Contract revision 5 (API major 1) of the authenticated client contract for
+    Contract revision 7 (API major 1) of the authenticated client contract for
     model discovery, inference, managed external access, usage, and durable
     jobs. `GET /api/v1/capabilities` reports the revision a running controller
     implements; clients must compare it rather than infer compatibility from
@@ -156,8 +156,10 @@ paths:
             x-poundlock-request-id: { $ref: "#/components/headers/RequestId" }
             x-poundlock-served-model: { $ref: "#/components/headers/ServedModel" }
             x-poundlock-response-cost: { $ref: "#/components/headers/ResponseCost" }
+            x-poundlock-frontier-budget-state: { $ref: "#/components/headers/FrontierBudgetState" }
+            x-poundlock-frontier-budget-remaining: { $ref: "#/components/headers/FrontierBudgetRemaining" }
         "400": { $ref: "#/components/responses/UnsupportedReasoningEffort" }
-        "403": { $ref: "#/components/responses/ExternalPermissionRequired" }
+        "403": { $ref: "#/components/responses/ExternalAccessRefused" }
         "404": { $ref: "#/components/responses/UnknownModel" }
         "409": { $ref: "#/components/responses/CapacityInUse" }
         "429": { $ref: "#/components/responses/CapacityQueueFull" }
@@ -184,8 +186,10 @@ paths:
             x-poundlock-request-id: { $ref: "#/components/headers/RequestId" }
             x-poundlock-served-model: { $ref: "#/components/headers/ServedModel" }
             x-poundlock-response-cost: { $ref: "#/components/headers/ResponseCost" }
+            x-poundlock-frontier-budget-state: { $ref: "#/components/headers/FrontierBudgetState" }
+            x-poundlock-frontier-budget-remaining: { $ref: "#/components/headers/FrontierBudgetRemaining" }
         "400": { $ref: "#/components/responses/UnsupportedReasoningEffort" }
-        "403": { $ref: "#/components/responses/ExternalPermissionRequired" }
+        "403": { $ref: "#/components/responses/ExternalAccessRefused" }
         "404": { $ref: "#/components/responses/UnknownModel" }
         "409": { $ref: "#/components/responses/CapacityInUse" }
         "429": { $ref: "#/components/responses/CapacityQueueFull" }
@@ -223,10 +227,22 @@ paths:
               schema: { $ref: "#/components/schemas/AccessState" }
   /api/v1/usage:
     get:
-      summary: Read this application token's managed LiteLLM usage
+      summary: Read this application token's managed LiteLLM usage and the install's frontier budget
       responses:
         "200":
-          description: Application-scoped policy and fresh usage, or explicit unavailability
+          description: >-
+            Application-scoped policy and fresh usage, or explicit
+            unavailability. Since revision 6, `frontier_budget` is the whole
+            install's standing against its weekly and monthly ceilings: the
+            same for every application, and never who spent it.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+                properties:
+                  schema_version: { type: integer, const: 1 }
+                  frontier_budget: { $ref: "#/components/schemas/FrontierBudget" }
   /api/v1/job-options:
     get:
       summary: List durable profiles, harnesses, and submission limits
@@ -239,6 +255,13 @@ paths:
         "200": { description: Jobs }
     post:
       summary: Submit a replay-safe durable job
+      description: >-
+        Since revision 7 (`job_budget`), `policy.budget` may cap the job:
+        `wall_seconds` (60 to 86,400) shortens the runner's wall clock for it,
+        and `frontier_cents` caps its external-model spend. Once recorded spend
+        reaches the cap, the job's next external request is refused with
+        `job_budget_exhausted`; a model with no price is refused with
+        `job_budget_unpriced`. Job options publish the bounds in `policy_limits`.
       requestBody:
         required: true
         content:
@@ -254,7 +277,7 @@ paths:
     get:
       summary: A job with its policy, result and error (a token reads only its own jobs)
       responses:
-        "200": { description: Job }
+        "200": { description: "Job. Since revision 7 it carries `frontier_spend_usd`, its recorded external-model spend." }
         "404": { description: No such job, or not this token's }
   /api/v1/jobs/{id}/events:
     parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
@@ -286,7 +309,7 @@ components:
       in: header
       description: >-
         Revision 5. Seconds to hold the request while its model's exclusive
-        slot is busy, at most 110 (under a typical reverse proxy's two-minute timeout). Nothing is
+        slot is busy, at most 110 (under the hub proxy's timeout). Nothing is
         sent before the slot is the request's. Without it the operator's
         default applies (`default_wait_seconds` on `/v1/capacity`, 110 unless
         the operator sets it; zero answers at once, as before revision 5). A
@@ -340,6 +363,17 @@ components:
         The gateway's own cost estimate for this call in US dollars, when it
         reports one, as a non-negative decimal (exponent notation allowed).
         An estimate, not a bill. Revision 4.
+      schema: { type: string }
+    FrontierBudgetState:
+      description: >-
+        On a request to an external profile while the operator has set a
+        frontier budget: the install's standing before this request, `ok` or
+        `low` (past the warning share). Revision 6.
+      schema: { enum: [ok, low] }
+    FrontierBudgetRemaining:
+      description: >-
+        On the same requests: US dollars left in the tightest period before
+        this request, counting requests still in flight. Revision 6.
       schema: { type: string }
   securitySchemes:
     applicationToken:
@@ -404,13 +438,16 @@ components:
             data_destination_confirmation_required, managed_budget_required,
             managed_identity_provision_failed,
             managed_identity_reconciliation_required,
-            managed_identity_unavailable. Runtime (inference only):
+            managed_identity_unavailable, frontier_budget_exhausted,
+            frontier_budget_unpriced (revision 6). Runtime (inference only):
             runtime_node_missing, runtime_node_unavailable,
             runtime_node_network_unavailable, runtime_node_offline,
             runtime_wake_unavailable.
         warning_reason:
           type: [string, "null"]
-          description: data_destination_unknown or, for job preflight, runner_not_connected
+          description: >-
+            data_destination_unknown, frontier_budget_low (revision 6) or, for
+            job preflight, runner_not_connected
         runtime_state:
           enum: [preparation_required]
           description: >-
@@ -438,6 +475,50 @@ components:
         data_destination:
           enum: [operator_network, external, unknown]
         usage: { type: [object, "null"], additionalProperties: true }
+        frontier_budget:
+          $ref: "#/components/schemas/FrontierBudgetSummary"
+          description: External profiles only, while the operator has set a frontier budget (revision 6).
+    FrontierBudgetSummary:
+      type: object
+      required: [state]
+      properties:
+        state: { enum: [ok, low, exhausted] }
+        remaining_usd: { type: [number, "null"], description: Dollars left in the tightest period }
+        resets_at:
+          type: [string, "null"]
+          format: date-time
+          description: When the latest period that is not ok resets
+    FrontierBudget:
+      type: object
+      required: [configured, state, warn_at, utc_offset_minutes, periods]
+      description: >-
+        One weekly and one monthly ceiling on what requests to external
+        profiles cost, across every application and durable job. Poundlock
+        meters each request: the gateway's cost, else the provider's, else
+        reported tokens at the profile's published price, else its admission
+        estimate. Spend is an estimate, never a bill. Revision 6.
+      properties:
+        configured: { type: boolean }
+        state: { enum: [unconfigured, ok, low, exhausted] }
+        remaining_usd: { type: [number, "null"] }
+        warn_at: { type: number, exclusiveMinimum: 0, exclusiveMaximum: 1 }
+        utc_offset_minutes:
+          type: integer
+          description: Where weeks (Monday 00:00) and months (the 1st) begin, in minutes east of UTC
+        periods:
+          type: array
+          items:
+            type: object
+            required: [period, limit_usd, spent_usd, in_flight_usd, remaining_usd, starts_at, resets_at, state]
+            properties:
+              period: { enum: [weekly, monthly] }
+              limit_usd: { type: number }
+              spent_usd: { type: number }
+              in_flight_usd: { type: number, description: Estimates of requests admitted and still running }
+              remaining_usd: { type: number }
+              starts_at: { type: string, format: date-time }
+              resets_at: { type: string, format: date-time }
+              state: { enum: [ok, low, exhausted] }
     ModelProfile:
       type: object
       required: [id, object, owned_by, poundlock]
@@ -460,7 +541,9 @@ components:
             `capability_evidence`) is an array of measured evidence entries
             pasted from the Toolkit; each carries `age_days`, `stale` and
             `settings_match`, computed fresh on every read and never stored.
-            An empty array means unknown, not incapable.
+            An empty array means unknown, not incapable. `frontier_budget`
+            (revision 6) is a FrontierBudgetSummary on external profiles while
+            the operator has set a frontier budget.
           properties:
             uses:
               type: array
@@ -471,7 +554,7 @@ components:
               enum: [interactive-coding, durable-coding-agent, fast-code-completion]
               description: >-
                 The single-class view of `uses`, for clients that predate it. Read
-                `uses` instead. The next contract revision stops accepting
+                `uses` instead. A later contract revision stops accepting
                 `workload_class` when a profile is created or changed.
     Error:
       type: object
@@ -531,6 +614,19 @@ components:
                             items: { $ref: "#/components/schemas/DidYouMean" }
     ExternalPermissionRequired:
       description: The application token lacks external:invoke
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    ExternalAccessRefused:
+      description: >-
+        external_permission_required when the application token lacks
+        external:invoke; data_destination_confirmation_required when the
+        operator has not confirmed where the profile sends data. Since
+        revision 6, frontier_budget_exhausted when the install's weekly or
+        monthly frontier budget is used up (the message names the period and
+        when it resets; nothing was sent upstream), and
+        frontier_budget_unpriced when an external profile has no published
+        price while a budget is set. Do not retry these unchanged.
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }

@@ -41,6 +41,10 @@ pub struct AppConfig {
     /// When operator discovery reads OpenRouter's public model catalog, an
     /// outbound request to openrouter.ai (`POUNDLOCK_OPENROUTER_CATALOG`).
     pub openrouter_catalog: CatalogMode,
+    /// The worker runtime a runner must report before it may claim a job, such
+    /// as `runsc`, so jobs never go to a runner left on a host's own Docker.
+    /// A runner's report is its own statement: a guard, not proof.
+    pub required_worker_runtime: Option<String>,
 }
 
 /// `on-request` (the default) reads the catalog only when an operator asks for
@@ -132,6 +136,10 @@ impl AppConfig {
             )?,
             backup: backup_env()?,
             openrouter_catalog: CatalogMode::from_env()?,
+            required_worker_runtime: env::var("POUNDLOCK_REQUIRED_WORKER_RUNTIME")
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty()),
         })
     }
 

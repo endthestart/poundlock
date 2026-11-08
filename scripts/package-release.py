@@ -52,7 +52,7 @@ for platform in dict.fromkeys(platforms):
             archive.add(source / name, arcname=name)
 with tempfile.TemporaryDirectory(prefix='poundlock-release-') as temporary:
     stage = pathlib.Path(temporary)
-    for name in ('compose.yaml', 'compose.wake.yaml', 'compose.repositories.yaml', 'compose.backup.yaml', 'README.md', 'CHANGELOG.md', 'ECOSYSTEM.md', 'LICENSE', 'NOTICE', 'SECURITY.md', 'CONTRIBUTING.md', 'THIRD_PARTY_NOTICES.md'):
+    for name in ('compose.yaml', 'compose.runner.yaml', 'compose.wake.yaml', 'compose.repositories.yaml', 'compose.backup.yaml', 'README.md', 'CHANGELOG.md', 'ECOSYSTEM.md', 'LICENSE', 'NOTICE', 'SECURITY.md', 'CONTRIBUTING.md', 'THIRD_PARTY_NOTICES.md'):
         shutil.copyfile(root / name, stage / name)
     shutil.copytree(root / 'docs' / 'guide', stage / 'docs' / 'guide')
     # Bundle docs link to these; keep them at the same relative paths.
@@ -64,6 +64,7 @@ with tempfile.TemporaryDirectory(prefix='poundlock-release-') as temporary:
     for name in ('poundlock-release.architecture.html', 'poundlock-release.architecture.json'):
         shutil.copyfile(root / 'docs' / 'maps' / name, maps / name)
     shutil.copytree(root / 'deploy' / 'macos', stage / 'deploy' / 'macos')
+    shutil.copytree(root / 'deploy' / 'runner-vm', stage / 'deploy' / 'runner-vm')
     shutil.copytree(root / 'config' / 'examples', stage / 'config' / 'examples')
     shutil.copytree(root / 'licenses', stage / 'licenses')
     environment = (root / '.env.example').read_text().replace('POUNDLOCK_IMAGE=\n', f'POUNDLOCK_IMAGE={args.image}\n')

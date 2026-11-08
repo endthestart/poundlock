@@ -56,6 +56,7 @@ function readyRow(profile,d){
     disabled?testButton:"",
     managed?"":`<button class="secondary" data-generate-model="${esc(profile.id)}"${loads}>Test inference</button>`,
     gateway?`<button class="secondary" data-sync-model="${esc(profile.id)}">Refresh from gateway</button><button class="secondary" data-verify-model="${esc(profile.id)}">Verify reasoning</button>`:"",
+    `<button class="secondary" data-price-model="${esc(profile.id)}">Set price</button>`,
   ].join("");
   return `<div class="item" data-profile="${esc(profile.id)}">
     ${rowIndicator(indicator)}<strong>${esc(profile.name)}${local}</strong>
@@ -66,6 +67,8 @@ function readyRow(profile,d){
     ${served?`<div class="meta"><span>Served model: ${esc(served)}</span></div>`:""}
     ${reasoning?`<div class="meta"><span>Reasoning: ${esc(reasoning)}</span></div>`:""}
     ${pricing?`<div class="meta"><span>${esc(pricing)}</span></div>`:""}
+    ${profile.data_destination==="external"&&!pricing?'<div class="meta"><span class="check-fail">No price: it cannot run while a frontier budget is set</span></div>':""}
+    ${priceForm(profile)}
     ${verifyResultsBlock(profile.id)}
     <div class="item-actions">
       ${disabled?`<button data-enable-model="${esc(profile.id)}">Re-enable</button>`:testButton}
@@ -74,6 +77,16 @@ function readyRow(profile,d){
       ${more?`<details class="more-actions"><summary>More</summary><div>${more}</div></details>`:""}
     </div>
   </div>`;
+}
+// The operator's own price, used by the frontier budget when the route
+// reports none, and shown as an estimate either way.
+function priceForm(profile){
+  const current=profile.catalog?.pricing;
+  return `<form class="inline-form" data-price-form="${esc(profile.id)}" hidden>
+    <label>Input, US$ per million tokens<input type="number" min="0" step="0.01" name="input" value="${current?esc(String(current.input_per_mtok)):""}" required></label>
+    <label>Output, US$ per million tokens<input type="number" min="0" step="0.01" name="output" value="${current?esc(String(current.output_per_mtok)):""}" required></label>
+    <button>Save price</button>
+  </form>`;
 }
 function renderReady(){
   const d=state.data,container=$("ready-groups");
@@ -87,6 +100,14 @@ function renderReady(){
   }
   container.innerHTML=[...groups.values()].map(group=>`<div class="panel model-group-panel"><h3>${esc(group.label)}</h3><div class="list">${group.profiles.map(profile=>readyRow(profile,d)).join("")}</div></div>`).join("");
   container.querySelectorAll("[data-edit-model]").forEach(button=>button.onclick=()=>openModelDrawer(button.dataset.editModel));
+  container.querySelectorAll("[data-price-model]").forEach(button=>button.onclick=()=>{const form=container.querySelector(`[data-price-form="${CSS.escape(button.dataset.priceModel)}"]`);form.hidden=!form.hidden;if(!form.hidden)form.querySelector("input").focus()});
+  container.querySelectorAll("[data-price-form]").forEach(form=>form.onsubmit=async event=>{
+    event.preventDefault();
+    const profile=state.data.models.find(item=>item.id===form.dataset.priceForm);if(!profile)return;
+    const pricing={input_per_mtok:Number(form.elements.input.value),output_per_mtok:Number(form.elements.output.value),source:"operator",refreshed_at:new Date().toISOString()};
+    // The catalog is replaced whole, so everything else in it is sent back unchanged.
+    try{await api(`/api/v1/model-profiles/${encodeURIComponent(profile.id)}`,{method:"PATCH",body:JSON.stringify({catalog:{...(profile.catalog||{}),pricing}})});toast("Price saved");await refresh()}catch(error){fail(error)}
+  });
   const mayLoad=button=>!button.dataset.loads||confirmLoad(button.dataset.loads);
   container.querySelectorAll("[data-test-model]").forEach(button=>button.onclick=()=>{if(mayLoad(button))testResource(`/api/v1/model-profiles/${button.dataset.testModel}/test`,button,{generate:false})});
   container.querySelectorAll("[data-generate-model]").forEach(button=>button.onclick=()=>{if(mayLoad(button))testResource(`/api/v1/model-profiles/${button.dataset.generateModel}/test`,button,{generate:true})});

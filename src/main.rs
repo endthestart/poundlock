@@ -1,6 +1,6 @@
 mod args;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use args::{Args, Command};
 use clap::Parser;
 use serde_json::Value;
@@ -108,6 +108,43 @@ async fn main() -> Result<()> {
                 credential_file,
                 config_file: config,
                 data_dir: data_dir.unwrap_or_else(poundlock::node::default_data_dir),
+            })
+            .await?
+        }
+        Command::Provenance { directory, json } => {
+            let report = poundlock::mcp::provenance::report(&directory)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("{}", report.text());
+            }
+            if !report.clean() || !report.without_evidence().is_empty() {
+                std::process::exit(1);
+            }
+        }
+        Command::Mcp {
+            controller,
+            token,
+            token_file,
+            roots,
+            git_token_file,
+            git_username,
+        } => {
+            let git_credentials = match git_token_file {
+                Some(path) => Some(poundlock::git_source::GitCredentials {
+                    username: git_username,
+                    token: std::fs::read_to_string(&path)
+                        .with_context(|| format!("read {}", path.display()))?
+                        .trim()
+                        .to_owned(),
+                }),
+                None => None,
+            };
+            poundlock::mcp::run(poundlock::mcp::McpOptions {
+                controller,
+                token: resolve_token(token, token_file.as_deref())?,
+                roots,
+                git_credentials,
             })
             .await?
         }

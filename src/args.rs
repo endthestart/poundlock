@@ -101,6 +101,45 @@ pub enum Command {
         #[arg(long, env = "POUNDLOCK_NODE_DATA_DIR")]
         data_dir: Option<PathBuf>,
     },
+    /// List the job patches applied to a Git folder through `poundlock mcp`,
+    /// and every file changed some other way since the first. Exits 1 when
+    /// anything changed outside jobs.
+    Provenance {
+        /// The folder patches were applied to.
+        #[arg(default_value = ".")]
+        directory: PathBuf,
+        /// Print the report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Serve Poundlock durable jobs to an MCP client, such as Claude Code, over
+    /// standard input and output. The agent plans and reviews; jobs write code.
+    Mcp {
+        #[arg(
+            long,
+            env = "POUNDLOCK_CONTROLLER_URL",
+            default_value = "http://127.0.0.1:7331"
+        )]
+        controller: String,
+        /// An application token with models:read, jobs:read, jobs:submit and
+        /// jobs:cancel. Prefer --token-file: arguments are visible to other
+        /// processes.
+        #[arg(long, env = "POUNDLOCK_TOKEN", hide_env_values = true)]
+        token: Option<String>,
+        #[arg(long)]
+        token_file: Option<PathBuf>,
+        /// A folder the agent may upload from and apply patches to, with
+        /// everything beneath it. Repeat for more than one.
+        #[arg(long = "root", required = true)]
+        roots: Vec<PathBuf>,
+        /// A file holding a token with read access to the repositories tasks
+        /// fetch as Git sources. Sent to the controller with such a job only.
+        #[arg(long)]
+        git_token_file: Option<PathBuf>,
+        /// The user name that goes with --git-token-file.
+        #[arg(long, default_value = "x-access-token")]
+        git_username: String,
+    },
     Acp {
         #[arg(
             long,

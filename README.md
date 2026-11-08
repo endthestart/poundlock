@@ -21,8 +21,13 @@ coding jobs and hand back a patch with independently checked results.
   [How it works](docs/guide/integrations.md#when-a-model-is-busy).
 - **Explicit external access.** Keep local inference separate from permission to
   send data or spend through external models, with optional LiteLLM budgets.
+- **One frontier budget.** A weekly and monthly ceiling on external spend across
+  every application and job, metered by Poundlock with or without LiteLLM.
 - **Jobs that survive disconnection.** Follow progress in the browser or API,
   cancel work, and download patches when it finishes.
+- **Hands for any agent.** `poundlock mcp` lets Claude Code or another MCP
+  client plan and review while every line of code comes from a durable job.
+  See [agents](docs/guide/agents.md).
 - **Independent checks.** Run verification commands, protect selected files,
   choose dependency network access, and limit repair attempts.
 - **Wake and release.** Enroll Linux or macOS machines, use Wake-on-LAN where
@@ -130,7 +135,8 @@ inference requests. Configure your editor’s OpenAI-compatible provider with:
 Use a fast-completion profile for autocomplete and a coding profile for chat.
 Select **Send prompts and files to external services** only for an application
 that may use models declared external. Managed LiteLLM access also
-requires an operator-set spending limit and reset period.
+requires an operator-set spending limit and reset period. To cap what all
+external use costs together, set a [frontier budget](docs/guide/frontier-budget.md).
 Keep the administrator token out of editor settings. The optional native ACP
 adapter is described in [integrations](docs/guide/integrations.md).
 

@@ -127,7 +127,7 @@ const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
       source:mode==='git'?{kind:'git',repository:'https://github.com/octocat/Hello-World',revision:'7fd1a60b01f91b314f59955a4e4d4e80d8edf11d'}:{kind:'snapshot',files:[{path:'greeting.txt',content_base64:Buffer.from('Original.\n').toString('base64')},{path:'test_greeting.py',content_base64:Buffer.from(testCode).toString('base64')},...extraFiles]}
     }));
     if(interruptedAgent) {
-      for(let n=0;n<200&&calls<2;n++) await delay(100);
+      for(let n=0;n<600&&calls<2;n++) await delay(100);
       assert.equal(calls,2,'worker never reached inference: '+logs);
       assert.ok((await owned()).containers.some(container=>container.State==='running'),'no running worker');
       if(mode==='cancel') await api('/api/v1/jobs/'+jobs[0].id+'/cancel',{});

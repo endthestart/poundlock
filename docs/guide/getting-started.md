@@ -123,6 +123,7 @@ sources, pinned Git commits, protected tests and replay-safe submission.
 
 ## Optional: use an existing LiteLLM gateway
 
+To cap what external models cost in total, set a [frontier budget](frontier-budget.md).
 See the [gateway setup example](litellm.md). Local-only deployments do not need
 LiteLLM, a provider account or a gateway database.
 

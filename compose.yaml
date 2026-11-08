@@ -19,6 +19,7 @@ services:
       POUNDLOCK_MAX_REQUESTS_IN_FLIGHT: ${POUNDLOCK_MAX_REQUESTS_IN_FLIGHT:-512}
       POUNDLOCK_NODE_OFFLINE_SECONDS: ${POUNDLOCK_NODE_OFFLINE_SECONDS:-15}
       POUNDLOCK_OPENROUTER_CATALOG: ${POUNDLOCK_OPENROUTER_CATALOG:-on-request}
+      POUNDLOCK_REQUIRED_WORKER_RUNTIME: ${POUNDLOCK_REQUIRED_WORKER_RUNTIME:-}
       RUST_LOG: ${POUNDLOCK_LOG:-poundlock=info,tower_http=info}
     ports:
       - "${POUNDLOCK_LISTEN_ADDRESS:-127.0.0.1}:${POUNDLOCK_PORT:-7331}:7331"
@@ -44,6 +45,9 @@ services:
     image: ${POUNDLOCK_IMAGE:?Set POUNDLOCK_IMAGE from the release environment file}
     command: ["runner"]
     restart: unless-stopped
+    # 0 when jobs run on another host instead (compose.runner.yaml).
+    deploy:
+      replicas: ${POUNDLOCK_LOCAL_RUNNERS:-1}
     user: "${POUNDLOCK_UID:-10001}:${POUNDLOCK_GID:-10001}"
     group_add: ["${POUNDLOCK_DOCKER_GID:?Set POUNDLOCK_DOCKER_GID to the Docker socket group; see README.md}"]
     environment:

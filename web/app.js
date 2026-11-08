@@ -236,6 +236,17 @@ function occupancyLabel(){
 }
 
 function metricCard(label,value,cls,page){const tag=page?"a":"div";return `<${tag} class="metric${cls?" "+esc(cls):""}"${page?` href="#${esc(page)}"`:""}><strong>${esc(value)}</strong><span>${esc(label)}</span></${tag}>`}
+// Where jobs run, as the connected runner reports it. A runner that does not
+// meet the operator's required runtime is refused work and shows as a fault.
+function runnerCard(runner){
+  if(!runner||runner.status!=="connected")return metricCard("Job runner","Not seen",runner?.required_worker_runtime?"warn":"");
+  const host=runner.host||{};
+  const isolation=host.isolation==="gvisor"?"gVisor":host.isolation==="container"?"Container":"Unreported";
+  const where=host.engine_name?` · ${host.engine_name}`:"";
+  const required=runner.required_worker_runtime;
+  const refused=required&&host.worker_runtime!==required;
+  return metricCard(refused?`Job runner (refused: needs ${required})`:"Job runner",`${isolation}${where}`,refused?"warn":"");
+}
 function renderSummary(){
   const d=state.data;
   const online=d.nodes.filter(n=>n.status==="online").length;
@@ -252,6 +263,7 @@ function renderSummary(){
   const disabledModels=d.models.filter(m=>m.retirement?.disabled).length;
   $("summary").innerHTML=[
     metricCard("Machines online",`${online} / ${nonRevoked}`,missingRunner?"warn":"","machines"),
+    runnerCard(d.runner),
     metricCard("Models",disabledModels?`${d.models.length} (${disabledModels} out)`:d.models.length,disabledModels?"ended":"","models"),
     metricCard("Servers and gateways",d.endpoints.length,"","connections"),
     metricCard("Queued",queued,queued?"attention":"","jobs"),

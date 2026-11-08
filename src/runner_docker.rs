@@ -23,6 +23,44 @@ pub(super) struct Docker {
     pub egress: super::egress::Egress,
     /// The Docker runtime job containers run under, when not the default (L16).
     runtime: Option<String>,
+    /// What this runner tells the controller about where jobs run: see
+    /// `host_report`.
+    pub host: serde_json::Value,
+}
+
+/// The hosts entry that names the supervisor on `network`, from the
+/// supervisor container's inspect output; none when it is not on that network.
+pub(super) fn supervisor_host_entry(supervisor: &Value, network: &str) -> Option<String> {
+    let address = supervisor["NetworkSettings"]["Networks"][network]["IPAddress"].as_str()?;
+    (!address.is_empty() && address.parse::<std::net::Ipv4Addr>().is_ok())
+        .then(|| format!("poundlock-supervisor:{address}"))
+}
+
+/// Where this runner's jobs run, as reported to the controller with every
+/// claim: the Docker engine's host name, version, operating system and
+/// kernel, and the runtime job containers use. It is the runner's own
+/// statement, shown to the operator and checked against
+/// `POUNDLOCK_REQUIRED_WORKER_RUNTIME`; it proves nothing about the host.
+pub(super) fn host_report(info: &serde_json::Value, runtime: Option<&str>) -> serde_json::Value {
+    let text = |key: &str| {
+        info[key]
+            .as_str()
+            .map(|value| value.chars().take(128).collect::<String>())
+    };
+    let runtime = runtime
+        .map(str::to_owned)
+        .or_else(|| text("DefaultRuntime"))
+        .unwrap_or_else(|| "runc".into());
+    serde_json::json!({
+        "engine_name": text("Name"),
+        "engine_version": text("ServerVersion"),
+        "operating_system": text("OperatingSystem"),
+        "kernel": text("KernelVersion"),
+        "architecture": text("Architecture"),
+        "worker_runtime": runtime,
+        "isolation": if runtime == "runsc" { "gvisor" } else { "container" },
+        "runner_version": env!("CARGO_PKG_VERSION"),
+    })
 }
 
 #[derive(Clone, Default)]
@@ -85,6 +123,7 @@ impl Docker {
             storage: String::new(),
             egress: Default::default(),
             runtime,
+            host: serde_json::Value::Null,
         };
         let version = docker.json(Method::GET, "/version", None).await?;
         ensure!(
@@ -116,13 +155,15 @@ impl Docker {
             docker.image.starts_with("sha256:"),
             "worker image must be immutable"
         );
+        let info = docker.json(Method::GET, "/info", None).await?;
         if let Some(runtime) = &docker.runtime {
-            let info = docker.json(Method::GET, "/info", None).await?;
             ensure!(
                 info["Runtimes"].get(runtime).is_some(),
                 "POUNDLOCK_WORKER_RUNTIME names {runtime}, which this Docker engine does not have"
             );
         }
+        docker.host = host_report(&info, docker.runtime.as_deref());
+        tracing::info!(host = %docker.host, "runner Docker host");
         Ok(docker)
     }
 
@@ -260,6 +301,21 @@ impl Docker {
         });
         if let Some(runtime) = &self.runtime {
             config["HostConfig"]["Runtime"] = json!(runtime);
+        }
+        // Job containers reach the supervisor by name. Docker's embedded DNS
+        // does not answer inside gVisor (runsc), so the name goes in the
+        // container's hosts file instead, under every runtime.
+        if !self.supervisor.is_empty() {
+            let supervisor = self
+                .json(
+                    Method::GET,
+                    &format!("/containers/{}/json", self.supervisor),
+                    None,
+                )
+                .await?;
+            if let Some(entry) = supervisor_host_entry(&supervisor, network) {
+                config["HostConfig"]["ExtraHosts"] = json!([entry]);
+            }
         }
         self.json(
             Method::POST,
@@ -822,6 +878,22 @@ mod tests {
     use super::*;
 
     #[test]
+    fn job_containers_name_the_supervisor_in_their_hosts_file() {
+        let supervisor = json!({"NetworkSettings":{"Networks":{
+            "poundlock-a1-net":{"IPAddress":"172.19.0.2"},
+            "bridge":{"IPAddress":""}
+        }}});
+        assert_eq!(
+            supervisor_host_entry(&supervisor, "poundlock-a1-net").as_deref(),
+            Some("poundlock-supervisor:172.19.0.2")
+        );
+        assert_eq!(supervisor_host_entry(&supervisor, "bridge"), None);
+        assert_eq!(supervisor_host_entry(&supervisor, "elsewhere"), None);
+        let odd = json!({"NetworkSettings":{"Networks":{"n":{"IPAddress":"x\nevil"}}}});
+        assert_eq!(supervisor_host_entry(&odd, "n"), None);
+    }
+
+    #[test]
     fn job_volumes_and_tmpfs_request_exec() {
         let volume = json!({
             "DriverOpts":{"type":"tmpfs","device":"tmpfs","o":crate::verifier_toolchain::work_volume_tmpfs_opts()}
@@ -894,6 +966,7 @@ mod tests {
                 storage: String::new(),
                 egress: Default::default(),
                 runtime: None,
+                host: serde_json::Value::Null,
             };
             let result = docker.remove_container("owned-worker").await;
             server.abort();
@@ -907,6 +980,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn the_host_report_names_the_engine_and_its_isolation() {
+        let info = serde_json::json!({
+            "Name": "runner-vm", "ServerVersion": "28.4.0", "OperatingSystem": "Debian GNU/Linux 13",
+            "KernelVersion": "6.12.0", "Architecture": "x86_64", "DefaultRuntime": "runc",
+            "Runtimes": {"runc": {}, "runsc": {}}, "ID": "secret-ish-engine-id"
+        });
+        let gvisor = host_report(&info, Some("runsc"));
+        assert_eq!(gvisor["engine_name"], "runner-vm");
+        assert_eq!(gvisor["worker_runtime"], "runsc");
+        assert_eq!(gvisor["isolation"], "gvisor");
+        assert!(gvisor.get("ID").is_none() && !gvisor.to_string().contains("secret-ish"));
+        let plain = host_report(&info, None);
+        assert_eq!(plain["worker_runtime"], "runc");
+        assert_eq!(plain["isolation"], "container");
+        let long = host_report(&serde_json::json!({"Name": "x".repeat(500)}), None);
+        assert_eq!(long["engine_name"].as_str().unwrap().len(), 128);
+        assert_eq!(long["worker_runtime"], "runc");
     }
 
     #[cfg(unix)]
@@ -1007,6 +1100,7 @@ mod tests {
             storage: "storage".into(),
             egress: Default::default(),
             runtime: None,
+            host: serde_json::Value::Null,
         };
         let result = docker.cleanup(None).await;
         server.abort();
@@ -1067,6 +1161,7 @@ mod tests {
             storage: "storage".into(),
             egress: Default::default(),
             runtime: None,
+            host: serde_json::Value::Null,
         };
         let result = docker
             .remove_volumes(&json!({"label":["x"]}).to_string())

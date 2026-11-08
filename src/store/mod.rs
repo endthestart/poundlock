@@ -8,10 +8,12 @@ mod nodes;
 pub mod retirement;
 mod runner;
 mod signals;
+mod spend;
 mod tokens;
 
 pub(crate) use nodes::LIVE_ENROLLMENT_CONFLICT;
 pub(crate) use signals::NodeSignal;
+pub use spend::{SpendLine, SpendRecord};
 pub(crate) use tokens::OPERATOR_CHECK_TOKEN;
 
 use crate::crypto::{Binding, SecretBox};
@@ -177,6 +179,7 @@ impl Store {
                PRIMARY KEY (os, arch, sha256)
              );",
         )?;
+        connection.execute_batch(spend::SCHEMA)?;
         Ok(())
     }
 

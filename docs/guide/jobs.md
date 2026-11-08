@@ -43,8 +43,11 @@ Completion alone does not mean independently verified.
 Send an authenticated `GET /api/v1/job-options` for available durable models,
 harnesses, permissions, source limits, the advertised verifier toolchain
 (`python`, `uv`, `writable_exec_paths`), `effective_budgets`, `policy_limits`
-and `active_jobs_per_token`. `contract_revision`
-is 5. Job-options lists only profiles whose `uses` include `durable` (a profile may
+and `active_jobs_per_token`. `runner_status` says whether a runner has
+contacted the controller recently, and `runner_isolation` how the connected
+runner isolates job containers (`gvisor` or `container`), when it says.
+`contract_revision`
+is 7. Job-options lists only profiles whose `uses` include `durable` (a profile may
 serve several uses); interactive and completion profiles stay on `GET /v1/models`,
 though a profile with both `durable` and `interactive` uses appears in both places.
 Each durable row includes `endpoint_kind`, `routing_revision`, and the same
@@ -157,6 +160,26 @@ instead of a remembered, possibly stale, version literal. Default false keeps
 today's behaviour. This matters most for outbound-network jobs that add or
 upgrade dependencies; Pi can and will check the registry when told to, but
 does not by default.
+
+Set `budget` to limit one job below the install's own limits:
+
+```json
+{"budget": {"wall_seconds": 1800, "frontier_cents": 200}}
+```
+
+- `wall_seconds` (60 to 86,400) is the whole job's wall clock, every attempt
+  and repair together. A runner whose own limit (`POUNDLOCK_JOB_WALL_SECONDS`)
+  is shorter still stops it sooner; the job's `wall_seconds` and
+  `deadline_at` show the budget it actually got.
+- `frontier_cents` (1 to 100,000) is what the job may spend on External
+  models, in US cents. Once its recorded spend reaches it, its next model
+  request is refused with `job_budget_exhausted`; a request already running
+  finishes, so a job can end one request over. A job with this limit needs a
+  priced model (`job_budget_unpriced` otherwise). The job shows
+  `frontier_spend_usd`. The install's frontier budget still applies on top.
+
+Controllers that support it list the `job_budget` feature; older ones refuse a
+policy that names `budget`.
 
 By default the agent can contact only its assigned model, and verification has no
 network. Operators may enable `POUNDLOCK_ALLOW_JOB_NETWORK=true` in the controller

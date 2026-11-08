@@ -1,4 +1,6 @@
 mod admin;
+mod budget;
+mod budget_metering;
 pub(crate) mod capacity;
 mod discovery;
 mod headers;
@@ -43,6 +45,8 @@ pub struct AppState {
     pub occupancy: capacity::Occupancy,
     pub runners: runner_api::RunnerPresence,
     pub managed_identities: ManagedIdentityManager,
+    /// Estimates of external requests admitted and not yet charged.
+    pub budget: crate::budget::BudgetGate,
 }
 
 pub async fn run(config: AppConfig) -> anyhow::Result<()> {
@@ -58,6 +62,7 @@ pub async fn run(config: AppConfig) -> anyhow::Result<()> {
         occupancy,
         runners: Default::default(),
         managed_identities,
+        budget: Default::default(),
     };
     let reconciliation = state.managed_identities.clone();
     tokio::spawn(async move {
@@ -116,6 +121,7 @@ pub fn router(state: AppState) -> Router {
         .route("/healthz", get(health))
         .route("/readyz", get(ready))
         .merge(admin::routes())
+        .merge(budget::routes())
         .merge(discovery::routes())
         .merge(route_add::routes())
         .merge(model_draft::routes())

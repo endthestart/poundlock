@@ -113,6 +113,8 @@ pub async fn run(options: RunnerOptions) -> Result<()> {
         );
     }
     tracing::info!(controller=%options.controller, capacity, "runner connected");
+    let mut host = docker.host.clone();
+    host["capacity"] = json!(capacity);
     let mut tasks = tokio::task::JoinSet::new();
     let mut active = HashSet::new();
     let mut tick = tokio::time::interval(Duration::from_secs(options.poll_seconds.max(1)));
@@ -141,7 +143,7 @@ pub async fn run(options: RunnerOptions) -> Result<()> {
         if active.len() >= usize::from(capacity) {
             continue;
         }
-        match client.claim(options.wall_seconds).await {
+        match client.claim(options.wall_seconds, &host).await {
             Ok(Some(package)) => {
                 let id = package.job.id.clone();
                 delivery::begin(&options.result_dir, &package.job)?;
@@ -221,7 +223,15 @@ async fn execute(
             json!({}),
         )
         .await?;
-    let expires = tokio::time::Instant::now() + Duration::from_secs(options.wall_seconds);
+    // The job's own budget, when shorter than this runner's, is the one it gets.
+    let expires = tokio::time::Instant::now()
+        + Duration::from_secs(
+            package
+                .job
+                .policy
+                .budget
+                .wall_seconds_with(options.wall_seconds),
+        );
     let workspace = {
         let preparation = async {
             let workspace = match &package.source {
@@ -619,9 +629,12 @@ impl RunnerClient {
             client: Client::builder().timeout(Duration::from_secs(30)).build()?,
         })
     }
-    async fn claim(&self, wall_seconds: u64) -> Result<Option<RunnerPackage>> {
-        self.post_json("/runner/v1/claim", &json!({"wall_seconds": wall_seconds}))
-            .await
+    async fn claim(&self, wall_seconds: u64, host: &Value) -> Result<Option<RunnerPackage>> {
+        self.post_json(
+            "/runner/v1/claim",
+            &json!({"wall_seconds": wall_seconds, "host": host}),
+        )
+        .await
     }
     async fn source(&self, id: &str) -> Result<crate::source::JobSource> {
         Ok(self

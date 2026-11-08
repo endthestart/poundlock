@@ -90,6 +90,39 @@ async fn revoked(state: &AppState, id: &str, token: &str) {
     }
 }
 
+/// A job's own external-spend limit (`policy.budget.frontier_cents`): refused
+/// once the job's recorded spend reaches it. Requests for one job run one at a
+/// time, so a job ends at most one request over.
+fn job_budget_admits(
+    state: &AppState,
+    id: &str,
+    package: &crate::domain::RunnerPackage,
+    body: &Value,
+) -> ApiResult<()> {
+    let Some(limit) = package.job.policy.budget.frontier_usd() else {
+        return Ok(());
+    };
+    if !crate::budget::metered(&package.model) {
+        return Ok(());
+    }
+    if crate::budget::estimate_usd(&package.model, body).is_none() {
+        return Err(ApiError::forbidden(
+            "job_budget_unpriced",
+            "this job has an external-model budget, but its model has no published price to meter it by; the operator must set one",
+        ));
+    }
+    let spent = state.store.frontier_spend_for_job(id)?;
+    if spent >= limit {
+        return Err(ApiError::forbidden(
+            "job_budget_exhausted",
+            format!(
+                "this job's external-model budget of ${limit:.2} is used up (${spent:.2} recorded)"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 async fn chat(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -103,6 +136,26 @@ async fn chat(
         return Err(ApiError::unavailable(
             "The managed model lease ended; submit a new job",
         ));
+    }
+    // A job's external requests count against the install's frontier budget
+    // like any other, charged to the application that submitted it.
+    let request_id = uuid::Uuid::new_v4().to_string();
+    let submitter = state.store.job_api_token_id(&id)?.flatten();
+    let requested_stream = body.get("stream").and_then(Value::as_bool) == Some(true);
+    job_budget_admits(&state, &id, &package, &body)?;
+    let mut metering = super::budget_metering::admit(
+        &state,
+        &package.model,
+        &body,
+        super::budget_metering::Origin {
+            request_id: &request_id,
+            api_token_id: submitter.as_deref().unwrap_or("operator"),
+            kind: "job",
+            job_id: Some(&id),
+        },
+    )?;
+    if metering.is_some() {
+        crate::budget::request_stream_usage(&mut body);
     }
     body["model"] = Value::String(super::runtime::managed_job_model_id(&state, &package)?);
     // One rule for every client: the profile's thinking default is applied by the
@@ -122,12 +175,19 @@ async fn chat(
     // Bounded here, and again between chunks below, with a coded 5xx the
     // harness's own retry treats as transient.
     let silence = Duration::from_secs(state.config.job_inference_timeout_seconds.max(1));
+    if let Some(metering) = &mut metering {
+        metering.dispatched();
+    }
     let upstream = tokio::select! {
         response = tokio::time::timeout(silence, state.inference.relay(&package.endpoint, "chat/completions", body)) => match response {
-            Ok(response) => response.map_err(|error| {
+            Ok(Ok(response)) => response,
+            Ok(Err(error)) => {
                 tracing::warn!(job_id=%id, attempt_id=%attempt_id, profile_id=%profile_id, %error, "job inference connection failed");
-                ApiError::unavailable("could not connect to the configured inference endpoint")
-            })?,
+                if let Some(metering) = metering.take() {
+                    metering.cancel();
+                }
+                return Err(ApiError::unavailable("could not connect to the configured inference endpoint"));
+            }
             Err(_) => {
                 tracing::warn!(job_id=%id, attempt_id=%attempt_id, profile_id=%profile_id, timeout_seconds=silence.as_secs(), "job inference upstream sent no response in time");
                 return Err(ApiError::gateway_timeout(
@@ -147,6 +207,9 @@ async fn chat(
             upstream_status = status.as_u16(),
             "job inference upstream returned an error status"
         );
+        if let Some(metering) = metering.take() {
+            metering.cancel();
+        }
         // The job sees the upstream's message without gateway internals (L3).
         let body = tokio::time::timeout(silence, super::redact::read_capped(upstream, 64 * 1024))
             .await
@@ -160,6 +223,12 @@ async fn chat(
                 &body,
             )))
             .map_err(|_| ApiError::unavailable("could not construct the job inference response"));
+    }
+    if let Some(metering) = &mut metering {
+        metering.begin(
+            super::budget_metering::is_event_stream(upstream.headers(), requested_stream),
+            super::budget_metering::gateway_cost(upstream.headers()),
+        );
     }
     let mut response = Response::builder().status(upstream.status());
     if let Some(content_type) = upstream.headers().get("content-type") {
@@ -178,7 +247,12 @@ async fn chat(
                     break;
                 }
                 chunk = tokio::time::timeout(silence, bytes.next()) => match chunk {
-                    Ok(Some(Ok(chunk))) => yield Ok(chunk),
+                    Ok(Some(Ok(chunk))) => {
+                        if let Some(metering) = &mut metering {
+                            metering.observe(&chunk);
+                        }
+                        yield Ok(chunk)
+                    }
                     Ok(Some(Err(error))) => {
                         tracing::warn!(job_id=%id, attempt_id=%attempt_id, profile_id=%profile_id, %error, "job inference stream read failed");
                         yield Err(std::io::Error::other(error));
@@ -193,8 +267,15 @@ async fn chat(
                 }
             }
         }
+        if let Some(metering) = metering.take() {
+            metering.settle();
+        }
     };
     response
         .body(Body::from_stream(stream))
         .map_err(|_| ApiError::unavailable("could not construct inference response"))
 }
+
+#[cfg(test)]
+#[path = "job_budget_tests.rs"]
+mod job_budget_tests;

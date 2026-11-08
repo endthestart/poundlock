@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "api_major": 1,
-  "contract_revision": 5,
-  "product_version": "0.4.0",
+  "contract_revision": 7,
+  "product_version": "0.4.4",
   "features": [
     "access_preflight",
     "availability_reasons",
@@ -12,6 +12,8 @@
     "data_destination",
     "durable_jobs",
     "external_invoke_permission",
+    "frontier_budget",
+    "job_budget",
     "managed_application_identities",
     "model_status",
     "permission_labels",

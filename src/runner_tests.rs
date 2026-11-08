@@ -249,16 +249,18 @@ fn confirmed_retry_updates_filesystem_failure_without_changing_verification() {
 }
 
 #[tokio::test]
-async fn claim_reports_the_runners_configured_wall_seconds() {
+async fn claim_reports_the_runners_configured_wall_seconds_and_host() {
     let (client, server) = controller(Router::new().route(
         "/runner/v1/claim",
         post(|Json(body): Json<Value>| async move {
             assert_eq!(body["wall_seconds"], 1800);
+            assert_eq!(body["host"]["isolation"], "gvisor");
             Json(Value::Null)
         }),
     ))
     .await;
-    assert!(client.claim(1800).await.unwrap().is_none());
+    let host = json!({"worker_runtime": "runsc", "isolation": "gvisor"});
+    assert!(client.claim(1800, &host).await.unwrap().is_none());
     server.abort();
 }
 

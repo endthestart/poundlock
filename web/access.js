@@ -35,12 +35,43 @@ function renderAccess(){
     list.querySelectorAll("[data-edit-token]").forEach(button=>button.onclick=()=>editToken(button.dataset.editToken));
     list.querySelectorAll("[data-revoke-token]").forEach(button=>button.onclick=async()=>{if(!confirm("Revoke this token? The application using it loses access immediately, its streams stop, and its queued and running jobs are cancelled. A replacement token won't see this token's jobs."))return;try{await api(`/api/v1/api-tokens/${button.dataset.revokeToken}/revoke`,{method:"POST",body:"{}"});toast("Token revoked");await refresh()}catch(error){fail(error)}});
   }
+  renderFrontierBudget();
   const identities=state.data.managed_identities||[],managedList=$("managed-identity-list");
   if(!identities.length){emptyState(managedList,"No application keys.","They appear once a gateway gives each application its own key.")}
   else{
     managedList.className="list";managedList.innerHTML=identities.map(identity=>{const token=tokens.find(item=>item.id===identity.api_token_id),endpoint=(state.data.endpoints||[]).find(item=>item.id===identity.endpoint_id);return `<div class="item"><strong>${esc(token?.name||"Removed application token")}</strong><div class="meta">${identityBadge(identity.status)}<span>${esc(endpoint?.name||"Removed gateway")}</span></div>${identity.last_error?`<p class="check-fail">${esc(identity.last_error)}</p>`:""}<div class="meta"><span>Updated ${new Date(identity.updated_at).toLocaleString()}</span></div></div>`}).join("");
   }
 }
+const BUDGET_STATE={ok:["ok","Within budget"],low:["review","Running low"],exhausted:["fault","Used up"]};
+function money(value){const amount=Number(value||0);return `$${amount.toFixed(amount>0&&amount<0.01?4:2)}`}
+function renderFrontierBudget(){
+  const view=state.data.frontier_budget;if(!view)return;
+  const form=$("frontier-budget-form");
+  if(!form.dataset.dirty){
+    const settings=view.settings||{};
+    $("frontier-budget-weekly").value=settings.weekly_usd??"";
+    $("frontier-budget-monthly").value=settings.monthly_usd??"";
+    $("frontier-budget-warn").value=Math.round((settings.warn_at??0.8)*100);
+    $("frontier-budget-offset").value=(settings.utc_offset_minutes??0)/60;
+  }
+  const standing=$("frontier-budget-standing"),periods=view.status?.periods||[];
+  if(!periods.length){emptyState(standing,"No ceiling set.","External spend is still recorded below.")}
+  else{
+    standing.className="list";standing.innerHTML=periods.map(period=>{const [cls,label]=BUDGET_STATE[period.state]||["unrecognised",period.state];return `<div class="item">${rowIndicator(cls)}<strong>${period.period==="weekly"?"This week":"This month"}: ${esc(money(period.spent_usd))} of ${esc(money(period.limit_usd))}</strong><div class="meta">${badge(cls,label)}<span>${esc(money(period.remaining_usd))} left</span>${period.in_flight_usd>0?`<span>${esc(money(period.in_flight_usd))} held for requests in flight</span>`:""}<span>Resets ${new Date(period.resets_at).toLocaleString()}</span></div></div>`}).join("");
+  }
+  const spend=$("frontier-budget-spend"),lines=view.spend?.lines||[];
+  if(!lines.length){emptyState(spend,"No external spend recorded.",`Since ${new Date(view.spend?.since||Date.now()).toLocaleDateString()}.`)}
+  else{
+    spend.className="list";spend.innerHTML=lines.map(line=>`<div class="item"><strong>${esc(money(line.cost_usd))} · ${esc(line.api_token_name||(line.api_token_id==="operator"?"Operator":"Removed application token"))}</strong><div class="meta"><span>${esc(line.profile_name||"Removed model")}</span><span>${line.requests} request${line.requests===1?"":"s"}</span>${line.estimated_requests?`<span>${line.estimated_requests} charged an estimate</span>`:""}</div></div>`).join("");
+  }
+}
+$("frontier-budget-form").addEventListener("input",event=>{event.currentTarget.dataset.dirty="1"});
+$("frontier-budget-form").addEventListener("submit",async event=>{
+  event.preventDefault();const form=event.currentTarget;
+  const amount=id=>{const value=$(id).value.trim();return value===""?undefined:Number(value)};
+  const body={weekly_usd:amount("frontier-budget-weekly"),monthly_usd:amount("frontier-budget-monthly"),warn_at:Number($("frontier-budget-warn").value)/100,utc_offset_minutes:Math.round(Number($("frontier-budget-offset").value)*60)};
+  try{state.data.frontier_budget=await api("/api/v1/frontier-budget",{method:"PUT",body:JSON.stringify(body)});delete form.dataset.dirty;renderFrontierBudget();toast("Frontier budget saved")}catch(error){fail(error)}
+});
 function resetToken(){
   editingToken=null;$("api-token-form").reset();
   $("api-token-heading").textContent="Create an application token";$("api-token-save").textContent="Create token";

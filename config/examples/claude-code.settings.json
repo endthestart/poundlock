@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "deny": ["Edit", "Write", "NotebookEdit"],
+    "allow": [
+      "mcp__poundlock__list_models",
+      "mcp__poundlock__job_status",
+      "mcp__poundlock__wait_for_job",
+      "mcp__poundlock__job_result",
+      "mcp__poundlock__get_patch",
+      "mcp__poundlock__provenance"
+    ]
+  }
+}

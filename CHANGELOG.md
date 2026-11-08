@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.4.4 (6 November 2026)
+
+Dispatch 0.3.1 and Toolkit 0.6.0 need no change: the contract stays at revision 7.
+
+- Jobs can run on their own VM with gVisor. `compose.runner.yaml` runs the
+  supervisor alone on another Docker host, and `deploy/runner-vm/setup.sh`
+  installs Docker, gVisor and the runner on a Debian or Ubuntu VM. Runners now
+  report where jobs run (engine, OS, kernel, worker runtime) with each claim;
+  the overview shows it, job options give `runner_isolation`, and
+  `POUNDLOCK_REQUIRED_WORKER_RUNTIME=runsc` refuses work to any runner whose
+  workers do not use gVisor. `POUNDLOCK_LOCAL_RUNNERS=0` removes the
+  controller host's own runner.
+
+## 0.4.3 (6 November 2026)
+
+Dispatch 0.3.1 and Toolkit 0.6.0 need no change: contract revision 7 only adds fields.
+
+- A durable job can carry its own budget (`policy.budget`, contract revision 7,
+  feature `job_budget`): `wall_seconds` caps the whole job's wall clock below the
+  runner's, and `frontier_cents` caps its external-model spend, refused with
+  `job_budget_exhausted` once reached, or `job_budget_unpriced` for a model with
+  no price. Jobs show `frontier_spend_usd`, and `job-options` publishes the
+  budget's bounds. `delegate_task` takes `budget_minutes` and `budget_usd`, and
+  `job_status` shows the spend.
+
+## 0.4.2 (6 November 2026)
+
+Dispatch 0.3.1 and Toolkit 0.6.0 need no change: the contract stays at revision 6.
+
+- `poundlock mcp` lets an outside agent, such as Claude Code, delegate coding to
+  durable jobs over the Model Context Protocol, without Poundlock Dispatch. Its
+  tools choose a model, upload an approved folder (credential files never
+  leave) or name a pushed Git commit, start a job from a task brief whose
+  acceptance checks and frozen paths the runner enforces, follow the job with
+  progress while it waits, summarise its checks and patch, and apply a reviewed
+  patch with `git apply --check` first, or commit it as a new branch.
+  `list_models` says what is left of the frontier budget. See
+  `docs/guide/agents.md`; `config/examples/claude-code.settings.json` denies
+  Claude Code its own file editing tools.
+- `poundlock provenance DIR` (and the MCP `provenance` tool) lists the job
+  patches applied to a Git folder and every file changed some other way since
+  the first, from hashes `apply_patch` records in `.git/poundlock/`, and names
+  any patch whose job had not passed its checks. It exits 1 when anything
+  changed outside jobs.
+
+## 0.4.1 (5 November 2026)
+
+Dispatch 0.3.1 and Toolkit 0.6.0 need no change: contract revision 6 only adds fields. Dispatch's next
+release shows what's left of the budget.
+
+- One frontier budget for the whole install (contract revision 6,
+  `frontier_budget`). Poundlock meters every request to an external model,
+  interactive, from a durable job or from an operator's check, and records its cost: the gateway's figure,
+  the provider's, reported tokens at the published price, or the admission
+  estimate. An operator-set weekly and/or monthly ceiling refuses new external
+  work with `frontier_budget_exhausted` once used up; external models without a
+  price are refused with `frontier_budget_unpriced` while a ceiling is set. Usage,
+  preflight, `/v1/models` and response headers report the standing. Set it under
+  **Access → Frontier budget** or `PUT /api/v1/frontier-budget`. **Set price** on a
+  model in **Models** gives a direct provider endpoint the price a ceiling needs.
+  With a ceiling set, managed LiteLLM keys no longer need their own budget before
+  external models work. See `docs/guide/frontier-budget.md`.
+- The **Set price** form lays its fields out in a row, not stacked.
+
 ## 0.4.0 (2 November 2026)
 
 Tested with Toolkit 0.5.0 and Dispatch 0.3.1.

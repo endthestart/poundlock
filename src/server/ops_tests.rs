@@ -32,6 +32,7 @@ pub(crate) fn test_state(configure: impl FnOnce(&mut AppConfig)) -> (tempfile::T
         capacity_default_wait_seconds: 0,
         openrouter_catalog: crate::config::CatalogMode::OnRequest,
         backup: None,
+        required_worker_runtime: None,
     };
     configure(&mut config);
     let state = AppState {
@@ -41,6 +42,7 @@ pub(crate) fn test_state(configure: impl FnOnce(&mut AppConfig)) -> (tempfile::T
         inference: InferenceClient::new().unwrap(),
         occupancy: capacity::Occupancy::new(),
         runners: Default::default(),
+        budget: Default::default(),
     };
     (directory, state)
 }
@@ -2329,6 +2331,14 @@ async fn job_options_publishes_the_policy_bounds_it_enforces() {
         timeout["default"],
         policy::DEFAULT_VERIFICATION_TIMEOUT_SECONDS
     );
+    assert_eq!(
+        limits["budget"]["wall_seconds"]["max"],
+        crate::job_budget::MAX_JOB_WALL_SECONDS
+    );
+    assert_eq!(
+        limits["budget"]["frontier_cents"]["max"],
+        crate::job_budget::MAX_JOB_FRONTIER_CENTS
+    );
 
     // Non-vacuous: a policy one second past the published maximum is refused,
     // and refused by the number that was published.
@@ -2485,4 +2495,128 @@ async fn a_model_server_declares_its_destination_once_for_its_models() {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert!(gateway.get("data_destination").is_none(), "{gateway}");
+}
+
+/// A ready job on a durable model, for runner claim tests.
+fn ready_job(state: &AppState) -> String {
+    let endpoint = state
+        .store
+        .create_endpoint(&serde_json::from_value(endpoint_body()).unwrap())
+        .unwrap();
+    let model = state
+        .store
+        .create_model_profile(
+            &serde_json::from_value(json!({
+                "name":"durable", "endpoint_id":endpoint.id, "model_id":"durable",
+                "context_tokens":8192, "max_output_tokens":1024,
+                "workload_class":"durable-coding-agent", "wake_policy":"never"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    let job = state
+        .store
+        .submit_job(
+            &serde_json::from_value(json!({
+                "source":{"kind":"empty"}, "idempotency_key":"runner-host",
+                "model_profile_id":model.id, "harness_profile_id":"pi", "prompt":"test"
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+    state
+        .store
+        .set_job_status(&job.id, "ready", "ready", "Ready")
+        .unwrap();
+    job.id
+}
+
+#[tokio::test]
+async fn a_runner_reports_where_jobs_run_and_only_known_fields_are_kept() {
+    let (_directory, state) = state_with_artifacts(None);
+    ready_job(&state);
+    let app = router(state);
+    let (_, overview) = send(
+        app.clone(),
+        "GET",
+        "/api/v1/overview",
+        "admin-secret",
+        json!({}),
+    )
+    .await;
+    assert_eq!(overview["runner"]["status"], "not_seen");
+    assert_eq!(overview["runner"]["host"], Value::Null);
+    let host = json!({
+        "engine_name": "runner-vm", "engine_version": "28.4.0", "worker_runtime": "runsc",
+        "isolation": "gvisor", "capacity": 2, "smuggled": "x".repeat(10_000),
+        "kernel": "k".repeat(1000)
+    });
+    let (status, claimed) = send(
+        app.clone(),
+        "POST",
+        "/runner/v1/claim",
+        "runner-secret",
+        json!({"wall_seconds": 3600, "host": host}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+    assert!(claimed["job"]["id"].is_string());
+    let (_, overview) = send(
+        app.clone(),
+        "GET",
+        "/api/v1/overview",
+        "admin-secret",
+        json!({}),
+    )
+    .await;
+    let kept = &overview["runner"]["host"];
+    assert_eq!(overview["runner"]["status"], "connected");
+    assert_eq!(kept["engine_name"], "runner-vm");
+    assert_eq!(kept["isolation"], "gvisor");
+    assert_eq!(kept["capacity"], 2);
+    assert!(kept.get("smuggled").is_none());
+    assert_eq!(kept["kernel"].as_str().unwrap().len(), 128);
+    let (_, options) = send(app, "GET", "/api/v1/job-options", "admin-secret", json!({})).await;
+    assert_eq!(options["runner_isolation"], "gvisor");
+}
+
+#[tokio::test]
+async fn a_required_runtime_keeps_jobs_from_other_runners() {
+    let (_directory, state) = state_with_artifacts(None);
+    let id = ready_job(&state);
+    let mut config = (*state.config).clone();
+    config.required_worker_runtime = Some("runsc".into());
+    let state = AppState {
+        config: Arc::new(config),
+        ..state
+    };
+    let app = router(state.clone());
+    for host in [
+        json!(null),
+        json!({"worker_runtime": "runc", "engine_name": "hub"}),
+    ] {
+        let (status, refused) = send(
+            app.clone(),
+            "POST",
+            "/runner/v1/claim",
+            "runner-secret",
+            json!({"wall_seconds": 3600, "host": host}),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{refused}");
+        assert_eq!(refused["error"]["code"], "worker_runtime_required");
+        assert_eq!(state.store.job(&id).unwrap().unwrap().status, "ready");
+    }
+    let (status, claimed) = send(
+        app.clone(),
+        "POST",
+        "/runner/v1/claim",
+        "runner-secret",
+        json!({"wall_seconds": 3600, "host": {"worker_runtime": "runsc", "isolation": "gvisor"}}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{claimed}");
+    assert_eq!(claimed["job"]["id"], id);
+    let (_, overview) = send(app, "GET", "/api/v1/overview", "admin-secret", json!({})).await;
+    assert_eq!(overview["runner"]["required_worker_runtime"], "runsc");
 }

@@ -673,6 +673,21 @@ async fn verify_reasoning(
         // shows whether the level works for clients, not whether the upstream
         // reads a field the relay would have moved.
         super::relay::apply_reasoning_settings(&mut request, &profile);
+        let probe_id = uuid::Uuid::new_v4().to_string();
+        let mut metering = super::budget_metering::admit(
+            &state,
+            &profile,
+            &request,
+            super::budget_metering::Origin {
+                request_id: &probe_id,
+                api_token_id: "operator",
+                kind: "check",
+                job_id: None,
+            },
+        )?;
+        if let Some(metering) = &mut metering {
+            metering.dispatched();
+        }
         let (status, reasoning_tokens, reasoning_chars) = match tokio::time::timeout(
             Duration::from_secs(state.config.external_timeout_seconds.max(30)),
             state
@@ -682,8 +697,20 @@ async fn verify_reasoning(
         .await
         {
             Ok(Ok(response)) => {
-                let status = response.status().as_u16();
-                let body: Value = response.json().await.unwrap_or(Value::Null);
+                let status = response.status();
+                let gateway_cost = super::budget_metering::gateway_cost(response.headers());
+                let bytes = response.bytes().await.unwrap_or_default();
+                match metering.take() {
+                    Some(mut metering) if status.is_success() => {
+                        metering.begin(false, gateway_cost);
+                        metering.observe(&bytes);
+                        metering.settle();
+                    }
+                    Some(metering) => metering.cancel(),
+                    None => {}
+                }
+                let status = status.as_u16();
+                let body: Value = serde_json::from_slice(&bytes).unwrap_or(Value::Null);
                 let usage = &body["usage"];
                 let tokens = usage["completion_tokens_details"]["reasoning_tokens"]
                     .as_u64()

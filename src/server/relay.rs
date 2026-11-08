@@ -84,6 +84,7 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
     let principal = api_token_auth(&state, &headers, "models:read")?;
     let kinds = state.store.endpoint_kinds()?;
     let occupancy = &state.occupancy;
+    let budget = super::budget::BudgetView::load(&state)?;
     let mut data = Vec::new();
     for profile in state.store.list_model_profiles()? {
         let kind = kinds
@@ -100,6 +101,7 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
                 .managed_identities
                 .access_for(&principal, &profile, &endpoint.endpoint)?;
         let (busy, _) = client_occupancy(&profile, occupancy);
+        budget.apply_access(&profile, &mut access);
         if busy && access["availability"] == "available" {
             access["availability"] = json!("busy");
             access["availability_reason"] = json!("capacity_in_use");
@@ -107,6 +109,9 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> ApiResult<
         let mut rows = advertised_models(profile, kind, &revision, occupancy);
         for row in &mut rows {
             apply_access_metadata(row, &access);
+            if let Some(summary) = access.get("frontier_budget") {
+                row["poundlock"]["frontier_budget"] = summary.clone();
+            }
         }
         data.extend(rows);
     }
@@ -643,6 +648,46 @@ async fn relay_claimed(
     occupancy_guard: Option<InteractiveGuard>,
     lease_id: String,
 ) -> axum::response::Response {
+    let requested_stream = body.get("stream").and_then(Value::as_bool) == Some(true);
+    let mut metering = match super::budget_metering::admit(
+        &state,
+        &profile,
+        &body,
+        super::budget_metering::Origin {
+            request_id,
+            api_token_id: &principal.id,
+            kind: "relay",
+            job_id: None,
+        },
+    ) {
+        Ok(metering) => metering,
+        Err(error) => {
+            return match error.code() {
+                Some(code) => {
+                    tracing::info!(
+                        request_id = %request_id,
+                        profile_id = %profile.id,
+                        reason = code,
+                        "external request refused by the frontier budget"
+                    );
+                    openai_error(StatusCode::FORBIDDEN, code, &error.to_string())
+                }
+                None => error.into_response(),
+            };
+        }
+    };
+    // Shown to the client before this request's own cost.
+    let budget_summary = match &metering {
+        Some(_) => match super::budget::BudgetView::load(&state) {
+            Ok(view) if view.configured() => Some(view.summary()),
+            Ok(_) => None,
+            Err(error) => return error.into_response(),
+        },
+        None => None,
+    };
+    if metering.is_some() {
+        crate::budget::request_stream_usage(&mut body);
+    }
     let mut relay_lease = RuntimeLease::new(state.clone(), profile.clone(), lease_id.clone());
     let runtime_model_id = match prepare_profile(&state, &mut relay_lease).await {
         Ok(model_id) => model_id,
@@ -736,7 +781,7 @@ async fn relay_claimed(
                 .unwrap_or("managed_identity_unavailable");
             let message = match code {
                 "managed_budget_required" => {
-                    "external access is disabled until the operator configures a budget and reset period"
+                    "external access is disabled until the operator sets a budget and reset period for this gateway's keys, or a frontier budget for the install"
                 }
                 "managed_identity_reconciliation_required" => {
                     "the managed gateway identity requires operator reconciliation"
@@ -787,6 +832,9 @@ async fn relay_claimed(
     // Wake/prepare uses its own external timeout. Inference time starts here.
     let budget = inference_timeout(path, state.config.external_timeout_seconds);
     let deadline = tokio::time::Instant::now() + budget;
+    if let Some(metering) = &mut metering {
+        metering.dispatched();
+    }
     let upstream =
         match tokio::time::timeout_at(deadline, state.inference.relay(&endpoint, path, body)).await
         {
@@ -800,6 +848,9 @@ async fn relay_claimed(
                     %error,
                     "upstream inference connection failed"
                 );
+                if let Some(metering) = metering.take() {
+                    metering.cancel();
+                }
                 return openai_error(
                     StatusCode::BAD_GATEWAY,
                     "upstream_connection_failed",
@@ -815,6 +866,10 @@ async fn relay_claimed(
                     header_timeout_seconds = budget.as_secs(),
                     "upstream inference did not send headers in time"
                 );
+                // The upstream may still be working, and billing, on it.
+                if let Some(metering) = metering.take() {
+                    metering.settle();
+                }
                 return openai_error(
                     StatusCode::GATEWAY_TIMEOUT,
                     "upstream_timeout",
@@ -832,6 +887,9 @@ async fn relay_claimed(
             upstream_status = status.as_u16(),
             "upstream inference returned an error status"
         );
+        if let Some(metering) = metering.take() {
+            metering.cancel();
+        }
         // An error answer is small and never streamed, so read it whole: it is
         // the only place the upstream says a model no longer exists, and that
         // is the evidence retirement counts.
@@ -895,6 +953,12 @@ async fn relay_claimed(
                     .is_ok_and(|cost| cost.is_finite() && cost >= 0.0)
         })
         .map(str::to_owned);
+    if let Some(metering) = &mut metering {
+        metering.begin(
+            super::budget_metering::is_event_stream(upstream.headers(), requested_stream),
+            super::budget_metering::gateway_cost(upstream.headers()),
+        );
+    }
     let served_model = profile.catalog.served_model.clone();
     let stream_request_id = request_id.to_owned();
     let stream_profile_id = profile.id.clone();
@@ -933,7 +997,12 @@ async fn relay_claimed(
                 next = tokio::time::timeout(budget, bytes.next()) => next,
             };
             match next {
-                Ok(Some(Ok(chunk))) => yield Ok(chunk),
+                Ok(Some(Ok(chunk))) => {
+                    if let Some(metering) = &mut metering {
+                        metering.observe(&chunk);
+                    }
+                    yield Ok(chunk)
+                }
                 Ok(Some(Err(error))) => {
                     tracing::warn!(
                         request_id = %stream_request_id,
@@ -973,6 +1042,9 @@ async fn relay_claimed(
                 }
             }
         }
+        if let Some(metering) = metering.take() {
+            metering.settle();
+        }
         stream_release.now();
     };
     let stream = pumped(stream, CLIENT_STALL, pump_request_id, release);
@@ -989,6 +1061,17 @@ async fn relay_claimed(
     }
     if let Some(cost) = response_cost {
         response = response.header("x-poundlock-response-cost", cost);
+    }
+    if let Some(summary) = budget_summary {
+        if let Some(state) = summary["state"].as_str() {
+            response = response.header("x-poundlock-frontier-budget-state", state);
+        }
+        if let Some(remaining) = summary["remaining_usd"].as_f64() {
+            response = response.header(
+                "x-poundlock-frontier-budget-remaining",
+                format!("{remaining:.6}"),
+            );
+        }
     }
     response
         .body(Body::from_stream(stream))

@@ -26,7 +26,7 @@ class Models(http.server.BaseHTTPRequestHandler):
 
 for name in ('browser-selections.cjs', 'browser-node-inventory.cjs', 'browser-linux-setup.cjs', 'browser-models.cjs', 'browser-theme.cjs'):
     subprocess.run(['node', str(root / 'tests/uat' / name)], env=environment, check=True)
-for name in ('browser-connections.cjs', 'browser-job.cjs', 'browser-session.cjs', 'browser-access.cjs', 'browser-declare-server.cjs', 'browser-stored-token.cjs'):
+for name in ('browser-connections.cjs', 'browser-job.cjs', 'browser-session.cjs', 'browser-access.cjs', 'browser-declare-server.cjs', 'browser-stored-token.cjs', 'browser-budget.cjs'):
     with tempfile.TemporaryDirectory(prefix='poundlock-browser-') as directory:
         model_server = http.server.ThreadingHTTPServer(('127.0.0.1', 0), Models)
         threading.Thread(target=model_server.serve_forever, daemon=True).start()

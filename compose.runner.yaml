@@ -1,0 +1,45 @@
+# The job runner alone, for a Docker host other than the controller's, such as
+# a small Linux VM with gVisor. Jobs then never run on the controller host's
+# Docker. See docs/guide/operations.md, "Run jobs in their own VM", and
+# deploy/runner-vm/setup.sh, which installs this file.
+#
+#   docker compose -f compose.runner.yaml --env-file runner.env up -d
+name: poundlock-runner
+
+services:
+  runner:
+    image: ${POUNDLOCK_IMAGE:?Set POUNDLOCK_IMAGE to the same image digest as the controller}
+    command: ["runner"]
+    restart: unless-stopped
+    user: "${POUNDLOCK_UID:-10001}:${POUNDLOCK_GID:-10001}"
+    group_add: ["${POUNDLOCK_DOCKER_GID:?Set POUNDLOCK_DOCKER_GID to this host's Docker socket group}"]
+    environment:
+      POUNDLOCK_CONTROLLER_URL: ${POUNDLOCK_CONTROLLER_URL:?Set POUNDLOCK_CONTROLLER_URL to the address this host reaches the controller at}
+      POUNDLOCK_RUNNER_TOKEN_FILE: /run/poundlock/runner-token
+      POUNDLOCK_PROJECTS_DIR: /projects
+      POUNDLOCK_WORK_DIR: /work
+      POUNDLOCK_RESULT_DIR: /results
+      POUNDLOCK_JOB_WALL_SECONDS: ${POUNDLOCK_JOB_WALL_SECONDS:-3600}
+      POUNDLOCK_RUNNER_CAPACITY: ${POUNDLOCK_RUNNER_CAPACITY:-1}
+      POUNDLOCK_RUNNER_MEMORY_BYTES: ${POUNDLOCK_RUNNER_MEMORY_BYTES:-}
+      # gVisor by default: the reason to give jobs their own host.
+      POUNDLOCK_WORKER_RUNTIME: ${POUNDLOCK_WORKER_RUNTIME:-runsc}
+      RUST_LOG: ${POUNDLOCK_LOG:-poundlock=info}
+    volumes:
+      # The controller's runner token, copied to this host and readable only by
+      # the runner's UID.
+      - ${POUNDLOCK_RUNNER_TOKEN_PATH:?Set POUNDLOCK_RUNNER_TOKEN_PATH to the runner token file}:/run/poundlock/runner-token:ro
+      # This host's own Docker, never the controller's.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - runner-results:/results
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=128m
+      - /work:rw,noexec,nosuid,size=${POUNDLOCK_WORK_SIZE:-2g},uid=${POUNDLOCK_UID:-10001},gid=${POUNDLOCK_GID:-10001},mode=0700
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 256
+    stop_grace_period: 60s
+
+volumes:
+  runner-results:
